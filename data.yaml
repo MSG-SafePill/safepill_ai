@@ -1,0 +1,7 @@
+# YOLO가 찾아갈 데이터 경로
+train: C:/AIData/pill_dataset/images/train
+val: C:/AIData/pill_dataset/images/val
+
+# 클래스(정답) 개수와 이름
+nc: 1
+names: ['pill']
