@@ -6,6 +6,8 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from python_service.db import fetch_pill_catalog
+from python_service.fusion import PillFusionService
 from python_service.inference import YoloInferenceEngine
 from python_service.ocr_pipeline import OcrPipeline
 
@@ -45,6 +47,27 @@ class OcrResponse(BaseModel):
     candidates: list[OcrCandidate]
 
 
+class IdentifiedPill(BaseModel):
+    pillName: str
+    confidence: float
+    ocrScore: float
+    detectionScore: float
+    matchedText: str | None = None
+
+
+class IdentifyRequest(BaseModel):
+    imagePath: str
+    topK: int = 5
+
+
+class IdentifyResponse(BaseModel):
+    requestId: str
+    status: str
+    detections: list[PillCandidate]
+    ocrCandidates: list[OcrCandidate]
+    identifiedPills: list[IdentifiedPill]
+
+
 def _default_model_path() -> Path:
     return Path(__file__).resolve().parent.parent / "runs" / "detect" / "train" / "weights" / "best.pt"
 
@@ -67,6 +90,11 @@ def get_engine() -> YoloInferenceEngine:
 def get_ocr_pipeline() -> OcrPipeline:
     use_gpu = os.getenv("SAFEPILL_OCR_GPU", "false").lower() == "true"
     return OcrPipeline(use_gpu=use_gpu)
+
+
+@lru_cache(maxsize=1)
+def get_fusion_service() -> PillFusionService:
+    return PillFusionService()
 
 
 @app.get("/health")
@@ -101,4 +129,30 @@ def ocr(request: OcrRequest):
         requestId=str(uuid4()),
         status="ok" if candidates else "no_text",
         candidates=[OcrCandidate(**candidate) for candidate in candidates],
+    )
+
+
+@app.post("/identify", response_model=IdentifyResponse)
+def identify(request: IdentifyRequest):
+    image_path = Path(request.imagePath)
+    if not image_path.exists():
+        raise HTTPException(status_code=400, detail=f"Image file not found: {image_path}")
+    if request.topK < 1 or request.topK > 20:
+        raise HTTPException(status_code=400, detail="topK must be between 1 and 20.")
+
+    detections = get_engine().detect(image_path)
+    ocr_candidates = get_ocr_pipeline().extract(image_path=image_path, detections=detections)
+    pill_catalog = fetch_pill_catalog()
+    identified = get_fusion_service().rank_candidates(
+        detections=detections,
+        ocr_candidates=ocr_candidates,
+        pill_catalog=pill_catalog,
+        top_k=request.topK,
+    )
+    return IdentifyResponse(
+        requestId=str(uuid4()),
+        status="ok" if identified else "no_match",
+        detections=[PillCandidate(pillName=str(det["pillName"]), confidence=float(det["confidence"])) for det in detections],
+        ocrCandidates=[OcrCandidate(**candidate) for candidate in ocr_candidates],
+        identifiedPills=[IdentifiedPill(**item) for item in identified],
     )
