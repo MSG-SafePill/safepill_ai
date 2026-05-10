@@ -6,6 +6,7 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from python_service.chatbot import ChatbotService
 from python_service.db import fetch_pill_catalog
 from python_service.fusion import PillFusionService
 from python_service.inference import YoloInferenceEngine
@@ -68,6 +69,19 @@ class IdentifyResponse(BaseModel):
     identifiedPills: list[IdentifiedPill]
 
 
+class ChatRequest(BaseModel):
+    question: str
+    identifiedPills: list[str] = []
+    imagePath: str | None = None
+
+
+class ChatResponse(BaseModel):
+    requestId: str
+    status: str
+    answer: str
+    referencedPills: list[str]
+
+
 def _default_model_path() -> Path:
     return Path(__file__).resolve().parent.parent / "runs" / "detect" / "train" / "weights" / "best.pt"
 
@@ -95,6 +109,11 @@ def get_ocr_pipeline() -> OcrPipeline:
 @lru_cache(maxsize=1)
 def get_fusion_service() -> PillFusionService:
     return PillFusionService()
+
+
+@lru_cache(maxsize=1)
+def get_chatbot_service() -> ChatbotService:
+    return ChatbotService()
 
 
 @app.get("/health")
@@ -155,4 +174,30 @@ def identify(request: IdentifyRequest):
         detections=[PillCandidate(pillName=str(det["pillName"]), confidence=float(det["confidence"])) for det in detections],
         ocrCandidates=[OcrCandidate(**candidate) for candidate in ocr_candidates],
         identifiedPills=[IdentifiedPill(**item) for item in identified],
+    )
+
+
+@app.post("/chat", response_model=ChatResponse)
+def chat(request: ChatRequest):
+    identified_pills = list(request.identifiedPills)
+
+    if request.imagePath:
+        identify_result = identify(IdentifyRequest(imagePath=request.imagePath, topK=5))
+        identified_pills = [item.pillName for item in identify_result.identifiedPills]
+
+    if not identified_pills:
+        raise HTTPException(status_code=400, detail="identifiedPills or imagePath must be provided.")
+
+    try:
+        result = get_chatbot_service().answer(request.question, identified_pills)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return ChatResponse(
+        requestId=str(uuid4()),
+        status="ok",
+        answer=str(result["answer"]),
+        referencedPills=[str(name) for name in result["referencedPills"]],
     )
