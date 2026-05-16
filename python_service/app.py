@@ -11,6 +11,7 @@ from python_service.db import fetch_pill_catalog
 from python_service.fusion import PillFusionService
 from python_service.inference import YoloInferenceEngine
 from python_service.ocr_pipeline import OcrPipeline
+from python_service.prescription_ocr import PrescriptionOcrParser
 
 app = FastAPI(title="SafePill Python Inference Service")
 
@@ -82,6 +83,27 @@ class ChatResponse(BaseModel):
     referencedPills: list[str]
 
 
+class PrescriptionOcrRequest(BaseModel):
+    imagePath: str
+
+
+class PrescriptionOcrItem(BaseModel):
+    medicineName: str
+    rawText: str
+    dosage: str | None = None
+    frequency: str | None = None
+    mealTiming: str | None = None
+    days: str | None = None
+    confidence: float
+
+
+class PrescriptionOcrResponse(BaseModel):
+    requestId: str
+    status: str
+    items: list[PrescriptionOcrItem]
+    rawCandidates: list[OcrCandidate]
+
+
 def _default_model_path() -> Path:
     return Path(__file__).resolve().parent.parent / "runs" / "detect" / "train" / "weights" / "best.pt"
 
@@ -114,6 +136,11 @@ def get_fusion_service() -> PillFusionService:
 @lru_cache(maxsize=1)
 def get_chatbot_service() -> ChatbotService:
     return ChatbotService()
+
+
+@lru_cache(maxsize=1)
+def get_prescription_parser() -> PrescriptionOcrParser:
+    return PrescriptionOcrParser()
 
 
 @app.get("/health")
@@ -174,6 +201,22 @@ def identify(request: IdentifyRequest):
         detections=[PillCandidate(pillName=str(det["pillName"]), confidence=float(det["confidence"])) for det in detections],
         ocrCandidates=[OcrCandidate(**candidate) for candidate in ocr_candidates],
         identifiedPills=[IdentifiedPill(**item) for item in identified],
+    )
+
+
+@app.post("/prescription-ocr", response_model=PrescriptionOcrResponse)
+def prescription_ocr(request: PrescriptionOcrRequest):
+    image_path = Path(request.imagePath)
+    if not image_path.exists():
+        raise HTTPException(status_code=400, detail=f"Image file not found: {image_path}")
+
+    ocr_candidates = get_ocr_pipeline().extract(image_path=image_path, detections=None)
+    parsed_items = get_prescription_parser().parse(ocr_candidates)
+    return PrescriptionOcrResponse(
+        requestId=str(uuid4()),
+        status="ok" if parsed_items else "no_text",
+        items=[PrescriptionOcrItem(**item) for item in parsed_items],
+        rawCandidates=[OcrCandidate(**candidate) for candidate in ocr_candidates],
     )
 
 
