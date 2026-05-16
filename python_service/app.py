@@ -1,9 +1,10 @@
 import os
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from python_service.chatbot import ChatbotService
@@ -148,6 +149,13 @@ def health():
     return {"status": "ok"}
 
 
+async def _save_upload(upload: UploadFile) -> Path:
+    suffix = Path(upload.filename or "").suffix or ".jpg"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+        temp_file.write(await upload.read())
+        return Path(temp_file.name)
+
+
 @app.post("/infer", response_model=InferResponse)
 def infer(request: InferRequest):
     image_path = Path(request.imagePath)
@@ -204,6 +212,15 @@ def identify(request: IdentifyRequest):
     )
 
 
+@app.post("/identify-upload", response_model=IdentifyResponse)
+async def identify_upload(image: UploadFile = File(...), topK: int = 5):
+    image_path = await _save_upload(image)
+    try:
+        return identify(IdentifyRequest(imagePath=str(image_path), topK=topK))
+    finally:
+        image_path.unlink(missing_ok=True)
+
+
 @app.post("/prescription-ocr", response_model=PrescriptionOcrResponse)
 def prescription_ocr(request: PrescriptionOcrRequest):
     image_path = Path(request.imagePath)
@@ -218,6 +235,15 @@ def prescription_ocr(request: PrescriptionOcrRequest):
         items=[PrescriptionOcrItem(**item) for item in parsed_items],
         rawCandidates=[OcrCandidate(**candidate) for candidate in ocr_candidates],
     )
+
+
+@app.post("/prescription-ocr-upload", response_model=PrescriptionOcrResponse)
+async def prescription_ocr_upload(image: UploadFile = File(...)):
+    image_path = await _save_upload(image)
+    try:
+        return prescription_ocr(PrescriptionOcrRequest(imagePath=str(image_path)))
+    finally:
+        image_path.unlink(missing_ok=True)
 
 
 @app.post("/chat", response_model=ChatResponse)
