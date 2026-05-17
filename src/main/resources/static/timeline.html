@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>프로젝트 일정표</title>
+  <style>
+    :root {
+      --left-col: 350px;
+      --month-col: 295px;
+      --row-h: 82px;
+      --line-color: #e5e7eb;
+      --text-main: #1f354a;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: #f4f5f7;
+      font-family: "Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+      color: var(--text-main);
+      display: flex;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .timeline {
+      position: relative;
+      width: calc(var(--left-col) + (var(--month-col) * 5));
+      border: 1px solid #d8dbe0;
+      background: #f7f8fa;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: var(--left-col) repeat(5, var(--month-col));
+      grid-template-rows: 72px repeat(7, var(--row-h));
+    }
+
+    .cell {
+      border-right: 1px solid var(--line-color);
+      border-bottom: 1px solid var(--line-color);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 25px;
+      color: #283f55;
+      background: #f7f8fa;
+    }
+
+    .task-head {
+      justify-content: flex-start;
+      padding-left: 24px;
+      font-size: 22px;
+    }
+
+    .task {
+      justify-content: flex-start;
+      padding-left: 24px;
+      font-size: 19px;
+      font-weight: 800;
+      letter-spacing: -0.6px;
+      white-space: nowrap;
+    }
+
+    .bars-layer {
+      position: absolute;
+      left: var(--left-col);
+      top: 72px;
+      width: calc(var(--month-col) * 5);
+      height: calc(var(--row-h) * 7);
+    }
+
+    .bar {
+      position: absolute;
+      height: 48px;
+      border-radius: 24px;
+      color: #fff;
+      font-size: 16px;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 0 12px;
+      box-shadow: 0 2px 6px rgba(20, 24, 34, 0.22);
+      white-space: nowrap;
+    }
+
+    .b1 { left: 80px; top: 18px; width: 240px; background: #284766; }
+    .b2 { left: 240px; top: calc(var(--row-h) + 18px); width: 390px; background: #1fb365; }
+    .b3 { left: 390px; top: calc(var(--row-h) * 2 + 18px); width: 620px; background: #2f86bd; }
+    .b4 { left: 390px; top: calc(var(--row-h) * 3 + 18px); width: 620px; background: #8c3fb6; }
+    .b5 { left: 390px; top: calc(var(--row-h) * 4 + 18px); width: 620px; background: #2ea37f; }
+    .b6 { left: 920px; top: calc(var(--row-h) * 5 + 18px); width: 270px; background: #ea8120; }
+    .b7 { left: 1100px; top: calc(var(--row-h) * 6 + 18px); width: 200px; background: #c93f2e; }
+
+  </style>
+</head>
+<body>
+  <div class="timeline">
+    <div class="grid">
+      <div class="cell task-head">TASK</div>
+      <div class="cell">2월</div>
+      <div class="cell">3월</div>
+      <div class="cell">4월</div>
+      <div class="cell">5월</div>
+      <div class="cell">6월</div>
+
+      <div class="cell task">1. 기획 및 설계</div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+      <div class="cell task">2. 데이터 수집 및 제작</div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+      <div class="cell task">3. 백엔드 개발</div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+      <div class="cell task">4. 프론트엔드 개발</div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+      <div class="cell task">5. AI 개발</div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+      <div class="cell task">6. 기능 고도화 및 배포</div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+      <div class="cell task">7. 최종 시연 및 발표 준비</div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+    </div>
+
+    <div class="bars-layer">
+      <div class="bar b1">SRS / ERD 등 설계 완료</div>
+      <div class="bar b2">DB 및 API 명세서</div>
+      <div class="bar b3">백엔드 로직 개발</div>
+      <div class="bar b4">UI/UX 개발</div>
+      <div class="bar b5">AI 개발</div>
+      <div class="bar b6">알고리즘 고도화</div>
+      <div class="bar b7">최종 시연 발표</div>
+    </div>
+  </div>
+</body>
+</html>
