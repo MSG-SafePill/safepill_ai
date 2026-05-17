@@ -33,15 +33,48 @@ def fetch_pill_names() -> list[str]:
 def fetch_pill_catalog() -> list[dict[str, str | int | None]]:
     with get_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT id, code, pill_name, imprint_text
-                FROM pills
-                ORDER BY pill_name
-                """
-            )
+            if _table_exists(cur, "pills"):
+                cur.execute(
+                    """
+                    SELECT id, code, pill_name, imprint_text
+                    FROM pills
+                    ORDER BY pill_name
+                    """
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT
+                        id,
+                        item_seq AS code,
+                        medicine_name AS pill_name,
+                        concat_ws(
+                            ' ',
+                            appearance_info ->> 'printFront',
+                            appearance_info ->> 'printBack'
+                        ) AS imprint_text
+                    FROM medicine_master
+                    ORDER BY medicine_name
+                    """
+                )
             rows = cur.fetchall()
     return [dict(row) for row in rows]
+
+
+def _table_exists(cur: RealDictCursor, table_name: str) -> bool:
+    cur.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+              AND table_name = %s
+        )
+        """,
+        (table_name,),
+    )
+    row = cur.fetchone()
+    return bool(row and row["exists"])
 
 
 def fetch_pill_context(pill_names: list[str]) -> list[dict[str, object]]:
