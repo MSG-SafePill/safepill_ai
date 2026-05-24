@@ -65,6 +65,7 @@ curl http://localhost:8000/health
 - `POST /ocr`: OCR 결과 반환
 - `POST /identify`: YOLO + OCR + DB 매칭 결과 반환
 - `POST /chat`: 식별된 약품 기반 AI 상담
+- `POST /interaction/analyze`: 약품/영양제 목록과 백엔드 상호작용 룰 기반 AI 안전 요약
 
 ## 예시 요청
 
@@ -72,6 +73,42 @@ curl http://localhost:8000/health
 {
   "imagePath": "C:/dev/safepill/sample/pill.jpg",
   "topK": 5
+}
+```
+
+상호작용 분석 요청 예시:
+
+```json
+{
+  "items": [
+    {
+      "itemName": "아스피린정",
+      "itemType": "MEDICINE",
+      "ingredients": [{"name": "aspirin"}],
+      "efficacy": "해열, 진통",
+      "precautions": "출혈 위험이 있는 환자는 주의"
+    },
+    {
+      "itemName": "오메가3",
+      "itemType": "SUPPLEMENT",
+      "ingredients": [{"name": "omega-3"}],
+      "precautions": "항응고제 복용자는 전문가 상담 권장"
+    }
+  ],
+  "interactionRules": [
+    {
+      "itemNameA": "아스피린정",
+      "itemNameB": "오메가3",
+      "ingredientNameA": "aspirin",
+      "ingredientNameB": "omega-3",
+      "riskLevel": "CAUTION",
+      "description": "출혈 경향이 증가할 수 있습니다."
+    }
+  ],
+  "userProfile": {
+    "age": 45,
+    "conditions": ["고혈압"]
+  }
 }
 ```
 

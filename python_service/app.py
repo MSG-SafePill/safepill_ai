@@ -11,6 +11,7 @@ from python_service.chatbot import ChatbotService
 from python_service.db import fetch_pill_catalog
 from python_service.fusion import PillFusionService
 from python_service.inference import YoloInferenceEngine
+from python_service.interaction_analysis import InteractionAnalysisService
 from python_service.ocr_pipeline import OcrPipeline
 from python_service.prescription_ocr import PrescriptionOcrParser
 
@@ -84,6 +85,57 @@ class ChatResponse(BaseModel):
     referencedPills: list[str]
 
 
+class InteractionIngredient(BaseModel):
+    name: str
+    dosage: str | None = None
+
+
+class InteractionItem(BaseModel):
+    itemName: str
+    itemType: str
+    ingredients: list[InteractionIngredient] = []
+    efficacy: str | None = None
+    precautions: str | None = None
+
+
+class InteractionRuleInput(BaseModel):
+    itemNameA: str | None = None
+    itemNameB: str | None = None
+    ingredientNameA: str
+    ingredientNameB: str
+    riskLevel: str | None = None
+    description: str | None = None
+
+
+class InteractionAnalyzeRequest(BaseModel):
+    items: list[InteractionItem]
+    interactionRules: list[InteractionRuleInput] = []
+    userProfile: dict | None = None
+
+
+class InteractionWarning(BaseModel):
+    title: str | None = None
+    severity: str | None = None
+    items: list[str] = []
+    reason: str | None = None
+
+
+class InteractionEvidence(BaseModel):
+    source: str | None = None
+    text: str | None = None
+
+
+class InteractionAnalyzeResponse(BaseModel):
+    requestId: str
+    status: str
+    riskLevel: str
+    summary: str
+    warnings: list[InteractionWarning]
+    recommendations: list[str]
+    evidence: list[InteractionEvidence]
+    disclaimer: str
+
+
 class PrescriptionOcrRequest(BaseModel):
     imagePath: str
 
@@ -137,6 +189,11 @@ def get_fusion_service() -> PillFusionService:
 @lru_cache(maxsize=1)
 def get_chatbot_service() -> ChatbotService:
     return ChatbotService()
+
+
+@lru_cache(maxsize=1)
+def get_interaction_analysis_service() -> InteractionAnalysisService:
+    return InteractionAnalysisService()
 
 
 @lru_cache(maxsize=1)
@@ -269,4 +326,29 @@ def chat(request: ChatRequest):
         status="ok",
         answer=str(result["answer"]),
         referencedPills=[str(name) for name in result["referencedPills"]],
+    )
+
+
+@app.post("/interaction/analyze", response_model=InteractionAnalyzeResponse)
+def analyze_interaction(request: InteractionAnalyzeRequest):
+    try:
+        result = get_interaction_analysis_service().analyze(
+            items=[item.model_dump() for item in request.items],
+            interaction_rules=[rule.model_dump() for rule in request.interactionRules],
+            user_profile=request.userProfile,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return InteractionAnalyzeResponse(
+        requestId=str(uuid4()),
+        status="ok",
+        riskLevel=str(result["riskLevel"]),
+        summary=str(result["summary"]),
+        warnings=[InteractionWarning(**warning) for warning in result["warnings"]],
+        recommendations=[str(item) for item in result["recommendations"]],
+        evidence=[InteractionEvidence(**item) for item in result["evidence"]],
+        disclaimer=str(result["disclaimer"]),
     )
