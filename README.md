@@ -46,6 +46,12 @@ pip install -r python_service\requirements.txt
 - `DB_PASS`
 - `SAFEPILL_MODEL_PATH`
 
+개발 중 OpenAI 키 없이 상호작용 분석 API만 확인하려면:
+
+```powershell
+$env:SAFEPILL_INTERACTION_OFFLINE="true"
+```
+
 ## Python API 서버 실행
 
 ```powershell
@@ -66,6 +72,8 @@ curl http://localhost:8000/health
 - `POST /identify`: YOLO + OCR + DB 매칭 결과 반환
 - `POST /chat`: 식별된 약품 기반 AI 상담
 - `POST /interaction/analyze`: 약품/영양제 목록과 백엔드 상호작용 룰 기반 AI 안전 요약
+
+처방전 OCR 응답의 `scheduleSuggestions`는 백엔드 `POST /api/schedules/{regId}`에 넘길 수 있는 후보값입니다. OCR 결과는 오인식 가능성이 있으므로 프론트에서 사용자가 확인한 뒤 등록해야 합니다.
 
 ## 예시 요청
 

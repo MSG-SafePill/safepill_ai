@@ -9,10 +9,9 @@ from openai import OpenAI
 class InteractionAnalysisService:
     def __init__(self) -> None:
         api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY is required for interaction analysis.")
+        self.offline_mode = os.getenv("SAFEPILL_INTERACTION_OFFLINE", "false").lower() == "true"
         self.model = os.getenv("SAFEPILL_INTERACTION_MODEL", os.getenv("SAFEPILL_CHAT_MODEL", "gpt-4o-mini"))
-        self.client = OpenAI(api_key=api_key)
+        self.client = OpenAI(api_key=api_key) if api_key and not self.offline_mode else None
         self.knowledge_path = Path(
             os.getenv(
                 "SAFEPILL_MEDICAL_KNOWLEDGE_PATH",
@@ -35,6 +34,9 @@ class InteractionAnalysisService:
                 "evidence": [],
                 "disclaimer": self._disclaimer(),
             }
+
+        if self.client is None:
+            return self._rule_based_response(items, interaction_rules)
 
         context = self._build_context(items, interaction_rules, user_profile or {})
         completion = self.client.chat.completions.create(
@@ -126,16 +128,18 @@ class InteractionAnalysisService:
             return "참고 지식 파일이 없습니다."
 
         text = self.knowledge_path.read_text(encoding="utf-8", errors="ignore")
+        if "여기에 실제 의학 지식" in text or not text.strip():
+            text = self._default_knowledge()
         blocks = [block.strip() for block in text.split("\n\n") if block.strip()]
         keywords = self._keywords(items, interaction_rules)
-        selected: list[str] = []
+        scored_blocks: list[tuple[int, str]] = []
         for block in blocks:
             lower_block = block.lower()
-            if any(keyword in lower_block for keyword in keywords):
-                selected.append(block)
-            if len(selected) >= 8:
-                break
+            score = sum(1 for keyword in keywords if keyword in lower_block)
+            if score > 0:
+                scored_blocks.append((score, block))
 
+        selected = [block for _, block in sorted(scored_blocks, key=lambda item: item[0], reverse=True)[:8]]
         if not selected:
             selected = blocks[:3]
         return "\n\n".join(selected)[:6000] if selected else "참고 지식이 비어 있습니다."
@@ -175,6 +179,78 @@ class InteractionAnalysisService:
             "evidence": parsed.get("evidence") if isinstance(parsed.get("evidence"), list) else [],
             "disclaimer": str(parsed.get("disclaimer") or self._disclaimer()),
         }
+
+    def _rule_based_response(
+        self,
+        items: list[dict[str, Any]],
+        interaction_rules: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if not interaction_rules:
+            return {
+                "riskLevel": "NONE",
+                "summary": "현재 제공된 상호작용 룰 기준으로 확인된 병용금기 또는 주의 상호작용은 없습니다.",
+                "warnings": [],
+                "recommendations": [
+                    "새로운 약이나 영양제를 추가하기 전에는 의사 또는 약사에게 현재 복용 목록을 보여주세요.",
+                    "증상 변화, 알레르기 반응, 출혈, 심한 어지러움 등이 있으면 즉시 전문가에게 문의하세요.",
+                ],
+                "evidence": [],
+                "disclaimer": self._disclaimer(),
+            }
+
+        warnings: list[dict[str, Any]] = []
+        evidence: list[dict[str, str]] = []
+        highest = "CAUTION"
+        for rule in interaction_rules:
+            severity = str(rule.get("riskLevel") or "CAUTION").upper()
+            if severity not in {"CAUTION", "WARNING", "DANGER"}:
+                severity = "CAUTION"
+            highest = self._max_risk(highest, severity)
+            item_names = [
+                str(name)
+                for name in [rule.get("itemNameA"), rule.get("itemNameB")]
+                if name
+            ]
+            title = f"{rule.get('ingredientNameA')} + {rule.get('ingredientNameB')} 병용 주의"
+            description = str(rule.get("description") or "상호작용 가능성이 있어 주의가 필요합니다.")
+            warnings.append(
+                {
+                    "title": title,
+                    "severity": severity,
+                    "items": item_names,
+                    "reason": description,
+                }
+            )
+            evidence.append({"source": "DUR_RULE", "text": description})
+
+        item_count = len(items)
+        return {
+            "riskLevel": highest,
+            "summary": f"총 {item_count}개 항목에서 {len(warnings)}건의 상호작용 주의 항목이 확인되었습니다.",
+            "warnings": warnings,
+            "recommendations": [
+                "복용을 임의로 중단하거나 용량을 바꾸지 말고 의사 또는 약사와 상담하세요.",
+                "같은 시간대에 함께 복용 중이라면 상담 전까지 복용 시간 조정이 필요한지 확인하세요.",
+                "출혈, 호흡곤란, 심한 발진, 의식 저하 같은 증상이 있으면 즉시 의료기관을 방문하세요.",
+            ],
+            "evidence": evidence,
+            "disclaimer": self._disclaimer(),
+        }
+
+    def _max_risk(self, current: str, candidate: str) -> str:
+        order = {"NONE": 0, "CAUTION": 1, "WARNING": 2, "DANGER": 3}
+        return candidate if order[candidate] > order[current] else current
+
+    def _default_knowledge(self) -> str:
+        return (
+            "항응고제, 항혈소판제, 오메가3, 은행잎 추출물 등은 출혈 경향과 관련된 주의가 필요할 수 있다. "
+            "멍, 코피, 혈뇨, 흑색변 같은 증상이 있으면 의료진 상담이 필요하다.\n\n"
+            "진통소염제(NSAIDs)는 위장관 출혈, 신장 부담, 혈압 상승과 관련될 수 있다. "
+            "위궤양 병력, 신장질환, 고령자는 전문가 상담이 중요하다.\n\n"
+            "중추신경계에 작용하는 약물이나 수면 보조 성분을 함께 복용하면 졸림, 어지러움, 낙상 위험이 커질 수 있다.\n\n"
+            "간에서 대사되는 약물은 음주, 간질환, 일부 건강기능식품과 함께 복용할 때 주의가 필요하다.\n\n"
+            "철분, 칼슘, 마그네슘 같은 미네랄은 일부 항생제나 갑상선 약의 흡수를 방해할 수 있어 복용 시간 간격이 필요할 수 있다."
+        )
 
     def _disclaimer(self) -> str:
         return "이 분석은 참고용이며 진단이나 처방이 아닙니다. 복용 변경 전 의사 또는 약사와 상담하세요."

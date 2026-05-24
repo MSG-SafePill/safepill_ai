@@ -140,6 +140,13 @@ class PrescriptionOcrRequest(BaseModel):
     imagePath: str
 
 
+class ScheduleSuggestion(BaseModel):
+    takeTime: str
+    daysOfWeek: list[str]
+    dosage: str
+    mealTiming: str | None = None
+
+
 class PrescriptionOcrItem(BaseModel):
     medicineName: str
     rawText: str
@@ -147,6 +154,7 @@ class PrescriptionOcrItem(BaseModel):
     frequency: str | None = None
     mealTiming: str | None = None
     days: str | None = None
+    scheduleSuggestions: list[ScheduleSuggestion] = []
     confidence: float
 
 
