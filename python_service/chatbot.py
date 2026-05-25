@@ -13,12 +13,19 @@ class ChatbotService:
         self.model = os.getenv("SAFEPILL_CHAT_MODEL", "gpt-4o-mini")
         self.client = OpenAI(api_key=api_key)
 
-    def answer(self, question: str, identified_pills: list[str]) -> dict[str, object]:
+    def answer(
+        self,
+        question: str,
+        identified_pills: list[str],
+        context_items: list[dict[str, object]] | None = None,
+        user_profile: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         if not question.strip():
             raise ValueError("question is required.")
 
-        pill_context = fetch_pill_context(identified_pills)
+        pill_context = self._context_from_items(context_items) if context_items else fetch_pill_context(identified_pills)
         context_text = self._format_context(pill_context)
+        profile_text = self._format_user_profile(user_profile or {})
         completion = self.client.chat.completions.create(
             model=self.model,
             temperature=0.2,
@@ -32,7 +39,7 @@ class ChatbotService:
                 },
                 {
                     "role": "user",
-                    "content": f"[식별된 약 정보]\n{context_text}\n\n[질문]\n{question}",
+                    "content": f"[사용자 건강 프로필]\n{profile_text}\n\n[식별된/등록된 약 정보]\n{context_text}\n\n[질문]\n{question}",
                 },
             ],
         )
@@ -40,6 +47,45 @@ class ChatbotService:
         if not answer:
             raise RuntimeError("Chat completion returned empty content.")
         return {"answer": answer, "referencedPills": [item["pillName"] for item in pill_context]}
+
+    def _context_from_items(self, context_items: list[dict[str, object]] | None) -> list[dict[str, object]]:
+        if not context_items:
+            return []
+
+        result: list[dict[str, object]] = []
+        for item in context_items:
+            ingredients = item.get("ingredients") or []
+            result.append(
+                {
+                    "pillName": item.get("itemName") or item.get("pillName") or "이름 없음",
+                    "manufacturer": item.get("manufacturer"),
+                    "dosageForm": item.get("itemType"),
+                    "ingredients": [
+                        {
+                            "name": ingredient.get("name") if isinstance(ingredient, dict) else str(ingredient),
+                            "strengthText": ingredient.get("dosage") if isinstance(ingredient, dict) else None,
+                        }
+                        for ingredient in ingredients
+                    ],
+                    "warnings": [
+                        {"type": "precautions", "text": item.get("precautions")}
+                    ]
+                    if item.get("precautions")
+                    else [],
+                    "interactions": [],
+                    "efficacy": item.get("efficacy"),
+                }
+            )
+        return result
+
+    def _format_user_profile(self, user_profile: dict[str, object]) -> str:
+        if not user_profile:
+            return "제공된 건강 프로필이 없습니다."
+        lines = []
+        for key, value in user_profile.items():
+            if value is not None:
+                lines.append(f"- {key}: {value}")
+        return "\n".join(lines) if lines else "제공된 건강 프로필이 없습니다."
 
     def _format_context(self, pill_context: list[dict[str, object]]) -> str:
         if not pill_context:
@@ -52,6 +98,8 @@ class ChatbotService:
                 lines.append(f"  제조사: {pill['manufacturer']}")
             if pill.get("dosageForm"):
                 lines.append(f"  제형: {pill['dosageForm']}")
+            if pill.get("efficacy"):
+                lines.append(f"  효능: {pill['efficacy']}")
             ingredients = pill.get("ingredients", [])
             if ingredients:
                 ing_text = ", ".join(

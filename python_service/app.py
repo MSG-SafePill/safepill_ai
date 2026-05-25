@@ -12,6 +12,7 @@ from python_service.db import fetch_pill_catalog
 from python_service.fusion import PillFusionService
 from python_service.inference import YoloInferenceEngine
 from python_service.interaction_analysis import InteractionAnalysisService
+from python_service.medication_matcher import MedicationMatcher
 from python_service.ocr_pipeline import OcrPipeline
 from python_service.prescription_ocr import PrescriptionOcrParser
 
@@ -53,6 +54,9 @@ class OcrResponse(BaseModel):
 
 class IdentifiedPill(BaseModel):
     pillName: str
+    itemId: int | None = None
+    itemType: str | None = None
+    manufacturer: str | None = None
     confidence: float
     ocrScore: float
     detectionScore: float
@@ -75,6 +79,8 @@ class IdentifyResponse(BaseModel):
 class ChatRequest(BaseModel):
     question: str
     identifiedPills: list[str] = []
+    contextItems: list[dict] = []
+    userProfile: dict | None = None
     imagePath: str | None = None
 
 
@@ -147,6 +153,14 @@ class ScheduleSuggestion(BaseModel):
     mealTiming: str | None = None
 
 
+class OcrMedicationMatchCandidate(BaseModel):
+    itemId: int
+    itemType: str
+    itemName: str
+    manufacturer: str | None = None
+    score: float
+
+
 class PrescriptionOcrItem(BaseModel):
     medicineName: str
     rawText: str
@@ -155,6 +169,7 @@ class PrescriptionOcrItem(BaseModel):
     mealTiming: str | None = None
     days: str | None = None
     scheduleSuggestions: list[ScheduleSuggestion] = []
+    matchCandidates: list[OcrMedicationMatchCandidate] = []
     confidence: float
 
 
@@ -163,6 +178,30 @@ class PrescriptionOcrResponse(BaseModel):
     status: str
     items: list[PrescriptionOcrItem]
     rawCandidates: list[OcrCandidate]
+
+
+class MedicationMatchRequest(BaseModel):
+    keywords: list[str]
+    topK: int = 5
+
+
+class MedicationMatchCandidate(BaseModel):
+    itemId: int
+    itemType: str
+    itemName: str
+    manufacturer: str | None = None
+    score: float
+
+
+class MedicationMatchResult(BaseModel):
+    keyword: str
+    candidates: list[MedicationMatchCandidate]
+
+
+class MedicationMatchResponse(BaseModel):
+    requestId: str
+    status: str
+    results: list[MedicationMatchResult]
 
 
 def _default_model_path() -> Path:
@@ -192,6 +231,11 @@ def get_ocr_pipeline() -> OcrPipeline:
 @lru_cache(maxsize=1)
 def get_fusion_service() -> PillFusionService:
     return PillFusionService()
+
+
+@lru_cache(maxsize=1)
+def get_medication_matcher() -> MedicationMatcher:
+    return MedicationMatcher()
 
 
 @lru_cache(maxsize=1)
@@ -294,6 +338,15 @@ def prescription_ocr(request: PrescriptionOcrRequest):
 
     ocr_candidates = get_ocr_pipeline().extract(image_path=image_path, detections=None)
     parsed_items = get_prescription_parser().parse(ocr_candidates)
+    match_results = {
+        str(result["keyword"]): result["candidates"]
+        for result in get_medication_matcher().match(
+            [str(item["medicineName"]) for item in parsed_items],
+            top_k=5,
+        )
+    }
+    for item in parsed_items:
+        item["matchCandidates"] = match_results.get(str(item["medicineName"]), [])
     return PrescriptionOcrResponse(
         requestId=str(uuid4()),
         status="ok" if parsed_items else "no_text",
@@ -319,11 +372,19 @@ def chat(request: ChatRequest):
         identify_result = identify(IdentifyRequest(imagePath=request.imagePath, topK=5))
         identified_pills = [item.pillName for item in identify_result.identifiedPills]
 
+    if not identified_pills and request.contextItems:
+        identified_pills = [str(item.get("itemName")) for item in request.contextItems if item.get("itemName")]
+
     if not identified_pills:
         raise HTTPException(status_code=400, detail="identifiedPills or imagePath must be provided.")
 
     try:
-        result = get_chatbot_service().answer(request.question, identified_pills)
+        result = get_chatbot_service().answer(
+            request.question,
+            identified_pills,
+            context_items=request.contextItems,
+            user_profile=request.userProfile,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -334,6 +395,18 @@ def chat(request: ChatRequest):
         status="ok",
         answer=str(result["answer"]),
         referencedPills=[str(name) for name in result["referencedPills"]],
+    )
+
+
+@app.post("/medication-match", response_model=MedicationMatchResponse)
+def medication_match(request: MedicationMatchRequest):
+    if not request.keywords:
+        raise HTTPException(status_code=400, detail="keywords is required.")
+    results = get_medication_matcher().match(request.keywords, request.topK)
+    return MedicationMatchResponse(
+        requestId=str(uuid4()),
+        status="ok" if results else "no_match",
+        results=[MedicationMatchResult(**result) for result in results],
     )
 
 

@@ -72,8 +72,48 @@ curl http://localhost:8000/health
 - `POST /identify`: YOLO + OCR + DB 매칭 결과 반환
 - `POST /chat`: 식별된 약품 기반 AI 상담
 - `POST /interaction/analyze`: 약품/영양제 목록과 백엔드 상호작용 룰 기반 AI 안전 요약
+- `POST /medication-match`: OCR/식별 텍스트를 백엔드 DB 등록용 후보(`itemId`, `itemType`)로 매칭
 
 처방전 OCR 응답의 `scheduleSuggestions`는 백엔드 `POST /api/schedules/{regId}`에 넘길 수 있는 후보값입니다. OCR 결과는 오인식 가능성이 있으므로 프론트에서 사용자가 확인한 뒤 등록해야 합니다.
+
+`/identify`와 `/prescription-ocr` 응답은 등록 연동을 위해 DB 매칭 후보를 포함합니다.
+
+- `identifiedPills[].itemId`
+- `identifiedPills[].itemType`
+- `identifiedPills[].manufacturer`
+- `items[].matchCandidates[]`
+
+약품명 매칭 요청 예시:
+
+```json
+{
+  "keywords": ["타이레놀정", "오메가3"],
+  "topK": 5
+}
+```
+
+응답 예시:
+
+```json
+{
+  "requestId": "...",
+  "status": "ok",
+  "results": [
+    {
+      "keyword": "타이레놀정",
+      "candidates": [
+        {
+          "itemId": 1,
+          "itemType": "MEDICINE",
+          "itemName": "타이레놀정500mg",
+          "manufacturer": "한국얀센",
+          "score": 0.92
+        }
+      ]
+    }
+  ]
+}
+```
 
 ## 예시 요청
 

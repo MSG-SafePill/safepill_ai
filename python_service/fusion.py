@@ -12,7 +12,7 @@ class PillFusionService:
         ocr_candidates: list[dict[str, float | int | str]],
         pill_catalog: list[dict[str, str | int | None]],
         top_k: int = 5,
-    ) -> list[dict[str, float | str | None]]:
+    ) -> list[dict[str, float | str | int | None]]:
         if not pill_catalog:
             return []
 
@@ -25,7 +25,7 @@ class PillFusionService:
         for item in ocr_candidates:
             token_scores.append((self._normalize(str(item["normalizedText"])), float(item["confidence"])))
 
-        ranked: list[dict[str, float | str | None]] = []
+        ranked: list[dict[str, float | str | int | None]] = []
         for pill in pill_catalog:
             pill_name = str(pill["pill_name"])
             imprint = str(pill["imprint_text"] or "")
@@ -36,6 +36,9 @@ class PillFusionService:
             ranked.append(
                 {
                     "pillName": pill_name,
+                    "itemId": int(pill["item_id"]) if pill.get("item_id") is not None else None,
+                    "itemType": str(pill.get("item_type") or "MEDICINE"),
+                    "manufacturer": str(pill.get("manufacturer")) if pill.get("manufacturer") else None,
                     "confidence": round(final_score, 4),
                     "ocrScore": round(ocr_similarity, 4),
                     "detectionScore": round(detection_confidence, 4),
