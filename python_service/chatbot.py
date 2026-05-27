@@ -72,6 +72,7 @@ class ChatbotService:
                     ]
                     if item.get("precautions")
                     else [],
+                    "intakeTimes": item.get("intakeTimes") or [],
                     "interactions": [],
                     "efficacy": item.get("efficacy"),
                 }
@@ -100,6 +101,9 @@ class ChatbotService:
                 lines.append(f"  제형: {pill['dosageForm']}")
             if pill.get("efficacy"):
                 lines.append(f"  효능: {pill['efficacy']}")
+            intake_times = pill.get("intakeTimes", [])
+            if intake_times:
+                lines.append(f"  복용 시간: {', '.join(str(time) for time in intake_times)}")
             ingredients = pill.get("ingredients", [])
             if ingredients:
                 ing_text = ", ".join(

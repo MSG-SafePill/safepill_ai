@@ -100,6 +100,7 @@ class InteractionItem(BaseModel):
     itemName: str
     itemType: str
     ingredients: list[InteractionIngredient] = []
+    intakeTimes: list[str] = []
     efficacy: str | None = None
     precautions: str | None = None
 
@@ -138,6 +139,9 @@ class InteractionAnalyzeResponse(BaseModel):
     summary: str
     warnings: list[InteractionWarning]
     recommendations: list[str]
+    scheduleRecommendations: list[str] = []
+    foodWarnings: list[str] = []
+    consultationGuidance: list[str] = []
     evidence: list[InteractionEvidence]
     disclaimer: str
 
@@ -430,6 +434,9 @@ def analyze_interaction(request: InteractionAnalyzeRequest):
         summary=str(result["summary"]),
         warnings=[InteractionWarning(**warning) for warning in result["warnings"]],
         recommendations=[str(item) for item in result["recommendations"]],
+        scheduleRecommendations=[str(item) for item in result.get("scheduleRecommendations", [])],
+        foodWarnings=[str(item) for item in result.get("foodWarnings", [])],
+        consultationGuidance=[str(item) for item in result.get("consultationGuidance", [])],
         evidence=[InteractionEvidence(**item) for item in result["evidence"]],
         disclaimer=str(result["disclaimer"]),
     )

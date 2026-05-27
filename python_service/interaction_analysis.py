@@ -31,6 +31,9 @@ class InteractionAnalysisService:
                 "summary": "분석할 약품 또는 영양제가 2개 미만입니다.",
                 "warnings": [],
                 "recommendations": ["새로운 약이나 영양제를 추가하기 전에는 의사 또는 약사와 상담하세요."],
+                "scheduleRecommendations": [],
+                "foodWarnings": [],
+                "consultationGuidance": ["새 약을 추가하거나 처방이 변경되면 의사 또는 약사에게 현재 복용 목록을 보여주세요."],
                 "evidence": [],
                 "disclaimer": self._disclaimer(),
             }
@@ -92,6 +95,9 @@ class InteractionAnalysisService:
                             }
                         ],
                         "recommendations": ["사용자가 취할 수 있는 안전한 다음 행동"],
+                        "scheduleRecommendations": ["복용 시간 조정이나 간격 확인이 필요한 경우의 안내"],
+                        "foodWarnings": ["피해야 하거나 주의할 음식/음주/영양제 안내"],
+                        "consultationGuidance": ["병원 또는 약사 상담이 필요한 상황"],
                         "evidence": [
                             {
                                 "source": "DUR_RULE|ITEM_PRECAUTION|MEDICAL_KNOWLEDGE",
@@ -114,7 +120,9 @@ class InteractionAnalysisService:
                 (
                     "위 정보를 바탕으로 약물 상호작용 위험을 한국어로 분석해라. "
                     "상호작용 룰이 없으면 단정하지 말고 확인된 위험이 없다고 표현해라. "
-                    "응급 위험 가능성, 중복 성분, 주의사항이 있으면 명확히 표시해라."
+                    "응급 위험 가능성, 중복 성분, 복용 시간 충돌, 피해야 할 음식/영양제, "
+                    "전문가 상담이 필요한 상황이 있으면 명확히 표시해라. "
+                    "복용 시간 변경은 처방 지시를 대체하지 않는 보수적 권고로만 작성해라."
                 ),
             ]
         )
@@ -176,6 +184,13 @@ class InteractionAnalysisService:
             "summary": str(parsed.get("summary") or "분석 결과 요약을 생성하지 못했습니다."),
             "warnings": parsed.get("warnings") if isinstance(parsed.get("warnings"), list) else [],
             "recommendations": parsed.get("recommendations") if isinstance(parsed.get("recommendations"), list) else [],
+            "scheduleRecommendations": parsed.get("scheduleRecommendations")
+            if isinstance(parsed.get("scheduleRecommendations"), list)
+            else [],
+            "foodWarnings": parsed.get("foodWarnings") if isinstance(parsed.get("foodWarnings"), list) else [],
+            "consultationGuidance": parsed.get("consultationGuidance")
+            if isinstance(parsed.get("consultationGuidance"), list)
+            else [],
             "evidence": parsed.get("evidence") if isinstance(parsed.get("evidence"), list) else [],
             "disclaimer": str(parsed.get("disclaimer") or self._disclaimer()),
         }
@@ -193,6 +208,14 @@ class InteractionAnalysisService:
                 "recommendations": [
                     "새로운 약이나 영양제를 추가하기 전에는 의사 또는 약사에게 현재 복용 목록을 보여주세요.",
                     "증상 변화, 알레르기 반응, 출혈, 심한 어지러움 등이 있으면 즉시 전문가에게 문의하세요.",
+                ],
+                "scheduleRecommendations": self._schedule_recommendations(items, interaction_rules),
+                "foodWarnings": [
+                    "현재 제공된 룰 기준으로 명확한 음식 상호작용은 확인되지 않았습니다.",
+                    "술이나 새 영양제를 추가할 때는 현재 복용 목록과 함께 의사 또는 약사에게 확인하세요.",
+                ],
+                "consultationGuidance": [
+                    "임신, 수유, 신장/간 질환, 심한 알레르기 병력이 있으면 복용 전 상담이 필요합니다."
                 ],
                 "evidence": [],
                 "disclaimer": self._disclaimer(),
@@ -233,9 +256,33 @@ class InteractionAnalysisService:
                 "같은 시간대에 함께 복용 중이라면 상담 전까지 복용 시간 조정이 필요한지 확인하세요.",
                 "출혈, 호흡곤란, 심한 발진, 의식 저하 같은 증상이 있으면 즉시 의료기관을 방문하세요.",
             ],
+            "scheduleRecommendations": self._schedule_recommendations(items, interaction_rules),
+            "foodWarnings": [
+                "상호작용 위험이 확인된 조합에는 술이나 새 영양제를 추가하지 말고 전문가에게 먼저 확인하세요.",
+                "철분, 칼슘, 마그네슘 같은 미네랄은 일부 약의 흡수를 방해할 수 있어 복용 간격 확인이 필요합니다.",
+            ],
+            "consultationGuidance": [
+                "DANGER 또는 WARNING 조합은 의사 또는 약사 상담 전까지 임의로 같이 복용하지 마세요.",
+                "출혈, 호흡곤란, 심한 발진, 실신, 의식 저하 같은 증상이 있으면 즉시 의료기관을 방문하세요.",
+            ],
             "evidence": evidence,
             "disclaimer": self._disclaimer(),
         }
+
+    def _schedule_recommendations(
+        self,
+        items: list[dict[str, Any]],
+        interaction_rules: list[dict[str, Any]],
+    ) -> list[str]:
+        has_schedule = any(item.get("intakeTimes") for item in items)
+        if not has_schedule:
+            return ["등록된 복용 시간이 없습니다. 복용 시간을 등록하면 같은 시간대 병용 여부를 더 정확히 확인할 수 있습니다."]
+
+        recommendations = ["복용 시간이 같은 약이나 영양제는 상호작용 경고가 있는지 먼저 확인하세요."]
+        if interaction_rules:
+            recommendations.append("상호작용 주의 조합은 같은 시간대 복용 여부를 의사 또는 약사에게 확인한 뒤 조정하세요.")
+        recommendations.append("처방전에서 식전/식후 지시가 있는 약은 해당 지시를 우선하고, 임의로 시간을 바꾸지 마세요.")
+        return recommendations
 
     def _max_risk(self, current: str, candidate: str) -> str:
         order = {"NONE": 0, "CAUTION": 1, "WARNING": 2, "DANGER": 3}
