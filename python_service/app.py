@@ -4,8 +4,11 @@ from functools import lru_cache
 from pathlib import Path
 from uuid import uuid4
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 from python_service.chatbot import ChatbotService
 from python_service.db import fetch_pill_catalog
