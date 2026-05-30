@@ -16,6 +16,7 @@ from python_service.fusion import PillFusionService
 from python_service.inference import YoloInferenceEngine
 from python_service.interaction_analysis import InteractionAnalysisService
 from python_service.medication_matcher import MedicationMatcher
+from python_service.pill_classifier import PillClassificationService
 from python_service.ocr_pipeline import OcrPipeline
 from python_service.prescription_ocr import PrescriptionOcrParser
 
@@ -211,8 +212,32 @@ class MedicationMatchResponse(BaseModel):
     results: list[MedicationMatchResult]
 
 
+class PillClassificationCandidate(BaseModel):
+    classLabel: str
+    medicineName: str
+    manufacturer: str
+    mark: str
+    shape: str
+    color: str
+    score: float
+    reason: str
+
+
+class PillClassificationResponse(BaseModel):
+    success: bool
+    candidates: list[PillClassificationCandidate]
+
+
 def _default_model_path() -> Path:
     return Path(__file__).resolve().parent.parent / "runs" / "detect" / "train" / "weights" / "best.pt"
+
+
+def _default_pill_cls_model_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "models" / "pill_cls" / "best.pt"
+
+
+def _default_pill_cls_mapping_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "mappings" / "pill_class_mapping.json"
 
 
 @lru_cache(maxsize=1)
@@ -258,6 +283,14 @@ def get_interaction_analysis_service() -> InteractionAnalysisService:
 @lru_cache(maxsize=1)
 def get_prescription_parser() -> PrescriptionOcrParser:
     return PrescriptionOcrParser()
+
+
+@lru_cache(maxsize=1)
+def get_pill_classification_service() -> PillClassificationService:
+    model_path = Path(os.getenv("SAFEPILL_PILL_CLS_MODEL_PATH", str(_default_pill_cls_model_path())))
+    mapping_path = Path(os.getenv("SAFEPILL_PILL_CLS_MAPPING_PATH", str(_default_pill_cls_mapping_path())))
+    device = os.getenv("SAFEPILL_DEVICE")
+    return PillClassificationService(model_path=model_path, mapping_path=mapping_path, device=device)
 
 
 @app.get("/health")
@@ -333,6 +366,22 @@ async def identify_upload(image: UploadFile = File(...), topK: int = 5):
     image_path = await _save_upload(image)
     try:
         return identify(IdentifyRequest(imagePath=str(image_path), topK=topK))
+    finally:
+        image_path.unlink(missing_ok=True)
+
+
+@app.post("/classify-pill", response_model=PillClassificationResponse)
+async def classify_pill(image: UploadFile = File(...)):
+    image_path = await _save_upload(image)
+    try:
+        try:
+            candidates = get_pill_classification_service().classify(image_path=image_path, top_k=3)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return PillClassificationResponse(
+            success=bool(candidates),
+            candidates=[PillClassificationCandidate(**candidate) for candidate in candidates],
+        )
     finally:
         image_path.unlink(missing_ok=True)
 

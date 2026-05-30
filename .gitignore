@@ -41,3 +41,7 @@ out/
 .venv/
 *.pyc
 __pycache__/
+
+datasets/
+runs/
+models/**/*.pt
