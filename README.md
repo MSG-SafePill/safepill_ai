@@ -64,6 +64,39 @@ uvicorn python_service.app:app --reload --port 8000
 curl http://localhost:8000/health
 ```
 
+## YOLO 학습(알약 종류 식별)
+
+현재 `/infer`의 `pillName`은 YOLO 클래스명을 그대로 사용합니다.  
+즉, **어떤 알약인지 식별**하려면 라벨 변환 단계에서 클래스가 1개(`pill`)가 아니라 알약별 멀티클래스로 만들어져야 합니다.
+
+1. JSON 라벨 -> YOLO TXT 변환 (클래스 매핑 포함)
+
+```powershell
+python convert_json.py --json-dir C:\AIData\...\라벨링데이터 --output-dir C:\AIData\labels_txt --class-map-output C:\AIData\labels_txt\classes.json
+```
+
+2. 이미지/라벨 split + `data.yaml` 자동 생성
+
+```powershell
+python split_data.py --image-dir C:\AIData\...\원천데이터 --label-dir C:\AIData\labels_txt --dataset-dir C:\AIData\pill_dataset --class-map C:\AIData\labels_txt\classes.json --data-yaml C:\Users\ysjys\IdeaProjects\safepill_hub\ai\data.yaml
+```
+
+3. YOLO 학습
+
+```powershell
+python train.py --data C:\Users\ysjys\IdeaProjects\safepill_hub\ai\data.yaml --model yolov8s.pt --epochs 200 --device 0
+```
+
+학습 후 모델 파일:
+
+- `SafePill_AI\yolov8s_full_run\weights\best.pt`
+
+서버에서 해당 모델을 사용하려면:
+
+```powershell
+$env:SAFEPILL_MODEL_PATH="C:\Users\ysjys\IdeaProjects\safepill_hub\ai\SafePill_AI\yolov8s_full_run\weights\best.pt"
+```
+
 ## 주요 엔드포인트
 
 - `GET /health`: 서비스 상태 확인
@@ -176,4 +209,3 @@ curl http://localhost:8000/health
 2. 샘플 이미지로 `/infer`, `/ocr`, `/identify` 확인
 3. 발표용 테스트 데이터 구성
 4. 백엔드 본체와 연결 방식 결정
-
