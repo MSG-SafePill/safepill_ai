@@ -1,67 +1,143 @@
-import os
+import argparse
 import random
 import shutil
+from pathlib import Path
+from typing import Sequence
+
 from tqdm import tqdm
 
-# ==========================================================
-# 1. 경로 설정 (탐색기 주소와 똑같은지 눈으로 한 번 꼭 확인하세요!)
-# ==========================================================
-# [원본 사진 폴더]
-img_dir = r"C:\AIData\166.약품식별_인공지능_개발을_위한_경구약제_이미지_데이터\01.데이터\1.Training\원천데이터\경구약제조합_5000종"
 
-# [우리가 방금 만든 정답지 폴더]
-txt_dir = r"C:\AIData\labels_txt"
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Build YOLO train/val dataset from image+label folders."
+    )
+    parser.add_argument("--images-dir", required=True, help="Source image root directory.")
+    parser.add_argument("--labels-dir", required=True, help="Source label root directory.")
+    parser.add_argument("--output-dir", required=True, help="Output dataset root directory.")
+    parser.add_argument("--train-ratio", type=float, default=0.8)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--extensions",
+        nargs="+",
+        default=[".jpg", ".jpeg", ".png", ".bmp", ".webp"],
+        help="Image extensions to include.",
+    )
+    parser.add_argument(
+        "--class-names-file",
+        help="Optional text file with class names (one per line). Creates output data.yaml.",
+    )
+    parser.add_argument(
+        "--data-yaml-path",
+        default="data.yaml",
+        help="Path of generated data.yaml (relative to output-dir or absolute).",
+    )
+    return parser.parse_args()
 
-# [최종 완성될 YOLO 전용 데이터셋 폴더]
-base_dir = r"C:\AIData\pill_dataset"
-# ==========================================================
 
-# 2. YOLO 전용 방 만들기 (train / val)
-for split in ['train', 'val']:
-    os.makedirs(os.path.join(base_dir, 'images', split), exist_ok=True)
-    os.makedirs(os.path.join(base_dir, 'labels', split), exist_ok=True)
+def collect_pairs(
+    images_dir: Path, labels_dir: Path, extensions: Sequence[str]
+) -> list[tuple[Path, Path, Path]]:
+    ext_set = {ext.lower() for ext in extensions}
+    pairs: list[tuple[Path, Path, Path]] = []
 
-# 3. 폴더 끝까지 파고들어서 사진 파일(png, jpg) 싹 다 찾기!
-all_imgs = []
-for root, dirs, files in os.walk(img_dir):
-    for file in files:
-        if file.endswith(('.png', '.jpg', '.jpeg')):
-            all_imgs.append(os.path.join(root, file))
+    for image_path in images_dir.rglob("*"):
+        if not image_path.is_file() or image_path.suffix.lower() not in ext_set:
+            continue
 
-print(f"총 {len(all_imgs)}개의 알약 사진을 찾았습니다!")
+        rel = image_path.relative_to(images_dir)
+        label_path = (labels_dir / rel).with_suffix(".txt")
+        if label_path.exists():
+            pairs.append((image_path, label_path, rel))
 
-# 4. 사진과 정답지(TXT) 짝꿍 맞추기
-valid_pairs = []
-for img_path in all_imgs:
-    filename = os.path.basename(img_path)
-    base_name = os.path.splitext(filename)[0] # 확장자 뗀 이름 (예: 알약1)
-    txt_path = os.path.join(txt_dir, base_name + '.txt') # 짝꿍 정답지 경로
+    return pairs
 
-    # 짝꿍 정답지가 존재할 때만 리스트에 넣기
-    if os.path.exists(txt_path):
-        valid_pairs.append((img_path, txt_path, filename, base_name + '.txt'))
 
-print(f"정답지와 완벽하게 짝이 맞는 데이터는 총 {len(valid_pairs)}개 입니다. 섞기 시작합니다!")
+def copy_pairs(
+    pairs: Sequence[tuple[Path, Path, Path]],
+    output_dir: Path,
+    split_name: str,
+) -> None:
+    images_root = output_dir / "images" / split_name
+    labels_root = output_dir / "labels" / split_name
 
-# 5. 순서를 무작위로 섞고 8:2 비율로 쪼개기
-random.shuffle(valid_pairs)
-split_idx = int(len(valid_pairs) * 0.8)
+    for image_src, label_src, rel in tqdm(pairs, desc=f"{split_name} copy"):
+        image_dst = images_root / rel
+        label_dst = (labels_root / rel).with_suffix(".txt")
 
-train_pairs = valid_pairs[:split_idx]
-val_pairs = valid_pairs[split_idx:]
+        image_dst.parent.mkdir(parents=True, exist_ok=True)
+        label_dst.parent.mkdir(parents=True, exist_ok=True)
 
-print(f"Train(공부용): {len(train_pairs)}개 / Val(시험용): {len(val_pairs)}개로 나눕니다.")
+        shutil.copy2(image_src, image_dst)
+        shutil.copy2(label_src, label_dst)
 
-# 6. 파일 복사하는 함수
-def copy_data(pairs, split_name):
-    for img_src, txt_src, img_name, txt_name in tqdm(pairs, desc=f"{split_name} 복사 중"):
-        # 사진 복사
-        shutil.copy(img_src, os.path.join(base_dir, 'images', split_name, img_name))
-        # 정답지 복사
-        shutil.copy(txt_src, os.path.join(base_dir, 'labels', split_name, txt_name))
 
-# 7. 진짜 실행!
-copy_data(train_pairs, 'train')
-copy_data(val_pairs, 'val')
+def write_data_yaml(
+    output_dir: Path, class_names_file: Path, data_yaml_path_arg: str
+) -> Path:
+    class_names = [
+        line.strip() for line in class_names_file.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+    if not class_names:
+        raise ValueError(f"Class names file is empty: {class_names_file}")
 
-print(f"\n✨ 대성공! {base_dir} 폴더에 YOLO를 위한 완벽한 데이터셋이 준비되었습니다.")
+    data_yaml_path = Path(data_yaml_path_arg)
+    if not data_yaml_path.is_absolute():
+        data_yaml_path = output_dir / data_yaml_path
+
+    content = "\n".join(
+        [
+            f"train: {output_dir / 'images' / 'train'}",
+            f"val: {output_dir / 'images' / 'val'}",
+            "",
+            f"nc: {len(class_names)}",
+            "names:",
+            *[f"  - {name}" for name in class_names],
+            "",
+        ]
+    )
+    data_yaml_path.parent.mkdir(parents=True, exist_ok=True)
+    data_yaml_path.write_text(content, encoding="utf-8")
+    return data_yaml_path
+
+
+def main() -> None:
+    args = parse_args()
+    images_dir = Path(args.images_dir)
+    labels_dir = Path(args.labels_dir)
+    output_dir = Path(args.output_dir)
+
+    if not images_dir.exists():
+        raise FileNotFoundError(f"images-dir not found: {images_dir}")
+    if not labels_dir.exists():
+        raise FileNotFoundError(f"labels-dir not found: {labels_dir}")
+    if not 0 < args.train_ratio < 1:
+        raise ValueError("--train-ratio must be between 0 and 1.")
+
+    pairs = collect_pairs(images_dir, labels_dir, args.extensions)
+    if not pairs:
+        raise RuntimeError("No valid image/label pairs found.")
+
+    rng = random.Random(args.seed)
+    rng.shuffle(pairs)
+
+    split_idx = int(len(pairs) * args.train_ratio)
+    train_pairs = pairs[:split_idx]
+    val_pairs = pairs[split_idx:]
+
+    print(f"Found pairs: {len(pairs)} (train={len(train_pairs)}, val={len(val_pairs)})")
+    copy_pairs(train_pairs, output_dir, "train")
+    copy_pairs(val_pairs, output_dir, "val")
+
+    print(f"Dataset prepared at: {output_dir}")
+
+    if args.class_names_file:
+        yaml_path = write_data_yaml(
+            output_dir=output_dir,
+            class_names_file=Path(args.class_names_file),
+            data_yaml_path_arg=args.data_yaml_path,
+        )
+        print(f"Generated data yaml: {yaml_path}")
+
+
+if __name__ == "__main__":
+    main()

@@ -177,3 +177,32 @@ curl http://localhost:8000/health
 3. 발표용 테스트 데이터 구성
 4. 백엔드 본체와 연결 방식 결정
 
+## YOLO 제품명 분류 학습 (다중 클래스)
+
+알약 이미지와 YOLO 라벨(`.txt`)을 준비해 아래 순서로 학습할 수 있습니다.
+
+1) 클래스 이름 파일 준비 (`classes.txt`, 한 줄에 한 클래스명)
+
+```text
+tylenol_500
+brufen_200
+...
+```
+
+2) 학습/검증 데이터셋 생성 + `data.yaml` 자동 생성
+
+```powershell
+python split_data.py `
+  --images-dir C:\AIData\pill_images `
+  --labels-dir C:\AIData\pill_labels `
+  --output-dir C:\AIData\pill_dataset `
+  --class-names-file C:\AIData\classes.txt
+```
+
+3) 학습 실행
+
+```powershell
+python train.py --data C:\AIData\pill_dataset\data.yaml --epochs 200 --batch 16
+```
+
+학습 완료 후 모델은 출력 로그의 `.../weights/best.pt` 경로에 생성됩니다.
