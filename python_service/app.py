@@ -16,6 +16,7 @@ from python_service.fusion import PillFusionService
 from python_service.inference import YoloInferenceEngine
 from python_service.interaction_analysis import InteractionAnalysisService
 from python_service.medication_matcher import MedicationMatcher
+from python_service.multi_pill_classifier import MultiPillClassificationService
 from python_service.pill_classifier import PillClassificationService
 from python_service.ocr_pipeline import OcrPipeline
 from python_service.prescription_ocr import PrescriptionOcrParser
@@ -228,6 +229,25 @@ class PillClassificationResponse(BaseModel):
     candidates: list[PillClassificationCandidate]
 
 
+class PillBox(BaseModel):
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+
+
+class DetectedPillClassification(BaseModel):
+    pillIndex: int
+    box: PillBox
+    candidates: list[PillClassificationCandidate]
+
+
+class MultiPillClassificationResponse(BaseModel):
+    success: bool
+    detectedCount: int
+    detectedPills: list[DetectedPillClassification]
+
+
 def _default_model_path() -> Path:
     return Path(__file__).resolve().parent.parent / "runs" / "detect" / "train" / "weights" / "best.pt"
 
@@ -291,6 +311,11 @@ def get_pill_classification_service() -> PillClassificationService:
     mapping_path = Path(os.getenv("SAFEPILL_PILL_CLS_MAPPING_PATH", str(_default_pill_cls_mapping_path())))
     device = os.getenv("SAFEPILL_DEVICE")
     return PillClassificationService(model_path=model_path, mapping_path=mapping_path, device=device)
+
+
+@lru_cache(maxsize=1)
+def get_multi_pill_classification_service() -> MultiPillClassificationService:
+    return MultiPillClassificationService(get_pill_classification_service())
 
 
 @app.get("/health")
@@ -381,6 +406,23 @@ async def classify_pill(image: UploadFile = File(...)):
         return PillClassificationResponse(
             success=bool(candidates),
             candidates=[PillClassificationCandidate(**candidate) for candidate in candidates],
+        )
+    finally:
+        image_path.unlink(missing_ok=True)
+
+
+@app.post("/classify-pills", response_model=MultiPillClassificationResponse)
+async def classify_pills(image: UploadFile = File(...)):
+    image_path = await _save_upload(image)
+    try:
+        try:
+            detected_pills = get_multi_pill_classification_service().classify(image_path=image_path, top_k=3)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return MultiPillClassificationResponse(
+            success=bool(detected_pills),
+            detectedCount=len(detected_pills),
+            detectedPills=[DetectedPillClassification(**item) for item in detected_pills],
         )
     finally:
         image_path.unlink(missing_ok=True)
