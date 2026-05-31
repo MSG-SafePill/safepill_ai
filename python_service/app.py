@@ -47,6 +47,9 @@ class OcrCandidate(BaseModel):
     normalizedText: str
     confidence: float
     regionIndex: int
+    textHeightPx: int | None = None
+    textWidthPx: int | None = None
+    textHeightRatio: float | None = None
 
 
 class OcrResponse(BaseModel):
@@ -260,6 +263,12 @@ def get_prescription_parser() -> PrescriptionOcrParser:
     return PrescriptionOcrParser()
 
 
+def _prescription_size_filter() -> tuple[int, float]:
+    min_height_px = int(os.getenv("SAFEPILL_PRESCRIPTION_MIN_TEXT_HEIGHT_PX", "18"))
+    min_height_ratio = float(os.getenv("SAFEPILL_PRESCRIPTION_MIN_TEXT_HEIGHT_RATIO", "0.012"))
+    return max(min_height_px, 0), max(min_height_ratio, 0.0)
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -267,8 +276,11 @@ def health():
 
 async def _save_upload(upload: UploadFile) -> Path:
     suffix = Path(upload.filename or "").suffix or ".jpg"
+    content = await upload.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded image is empty.")
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
-        temp_file.write(await upload.read())
+        temp_file.write(content)
         return Path(temp_file.name)
 
 
@@ -343,8 +355,21 @@ def prescription_ocr(request: PrescriptionOcrRequest):
     if not image_path.exists():
         raise HTTPException(status_code=400, detail=f"Image file not found: {image_path}")
 
-    ocr_candidates = get_ocr_pipeline().extract(image_path=image_path, detections=None)
+    try:
+        min_height_px, min_height_ratio = _prescription_size_filter()
+        ocr_candidates = get_ocr_pipeline().extract(
+            image_path=image_path,
+            detections=None,
+            min_text_height_px=min_height_px,
+            min_text_height_ratio=min_height_ratio,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     parsed_items = get_prescription_parser().parse(ocr_candidates)
+    if not parsed_items and (min_height_px > 0 or min_height_ratio > 0):
+        ocr_candidates = get_ocr_pipeline().extract(image_path=image_path, detections=None)
+        parsed_items = get_prescription_parser().parse(ocr_candidates)
     match_results = {
         str(result["keyword"]): result["candidates"]
         for result in get_medication_matcher().match(

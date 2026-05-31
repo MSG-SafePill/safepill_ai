@@ -58,6 +58,13 @@ $env:SAFEPILL_INTERACTION_OFFLINE="true"
 uvicorn python_service.app:app --reload --port 8000
 ```
 
+처방전 OCR에서 큰 글자를 우선 반영하려면 아래 옵션으로 최소 글자 크기를 조정할 수 있습니다.
+
+```powershell
+$env:SAFEPILL_PRESCRIPTION_MIN_TEXT_HEIGHT_PX="18"
+$env:SAFEPILL_PRESCRIPTION_MIN_TEXT_HEIGHT_RATIO="0.012"
+```
+
 헬스 체크:
 
 ```powershell

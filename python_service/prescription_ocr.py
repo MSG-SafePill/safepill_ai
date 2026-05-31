@@ -9,6 +9,12 @@ class PrescriptionOcrParser:
     meal_pattern = re.compile(r"(식전|식후|식간|취침\s?전|아침|점심|저녁)")
     split_pattern = re.compile(r"[\n\r]+|[;,]")
     noise_pattern = re.compile(r"(처방|조제|약국|병원|의원|환자|성명|복용법|일수|투약|보험|영수|전화)")
+    hard_noise_pattern = re.compile(
+        r"(교부번호|발행기관|신분확인번호|승인번호|약품명|성분|급여|투약량|횟수|주의사항|보관방법|유효기간|주소)"
+    )
+    medicine_form_pattern = re.compile(r"(정|정제|캡|캡슐|시럽|현탁액|과립|산|연질캡슐|장용정|서방정)$")
+    ingredient_suffix_pattern = re.compile(r"(염산염|수화물|무수물|수화산|복합체)$")
+    meal_only_pattern = re.compile(r"^(아침|점심|저녁|취침전|식전|식후|식간)$")
 
     def parse(self, ocr_candidates: list[dict[str, float | str | int]]) -> list[dict[str, object]]:
         items: list[dict[str, object]] = []
@@ -35,6 +41,14 @@ class PrescriptionOcrParser:
                 frequency = self._extract_frequency(line)
                 meal_timing = self._first_match(self.meal_pattern, line)
                 days = self._first_match(self.days_pattern, line)
+                if not self._is_medicine_line(
+                    raw_text=line,
+                    medicine_name=medicine_name,
+                    dosage=dosage,
+                    frequency=frequency,
+                    meal_timing=meal_timing,
+                ):
+                    continue
                 items.append(
                     {
                         "medicineName": medicine_name,
@@ -73,6 +87,38 @@ class PrescriptionOcrParser:
         cleaned = re.sub(r"[^\w가-힣\s()\-]", " ", cleaned)
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
         return cleaned or text.strip()
+
+    def _is_medicine_line(
+        self,
+        raw_text: str,
+        medicine_name: str,
+        dosage: str | None,
+        frequency: str | None,
+        meal_timing: str | None,
+    ) -> bool:
+        normalized_name = re.sub(r"\s+", "", medicine_name)
+        normalized_line = re.sub(r"\s+", "", raw_text)
+
+        if self.hard_noise_pattern.search(normalized_line):
+            return False
+        if self.meal_only_pattern.fullmatch(normalized_name):
+            return False
+        if len(normalized_name) < 2:
+            return False
+        if len(normalized_name) > 30 and not self.medicine_form_pattern.search(normalized_name):
+            return False
+        if not re.search(r"[가-힣A-Za-z]", normalized_name):
+            return False
+
+        has_medicine_shape = bool(
+            self.medicine_form_pattern.search(normalized_name)
+            or self.ingredient_suffix_pattern.search(normalized_name)
+        )
+        if has_medicine_shape:
+            return True
+
+        # Keep rare lines that include dosage/frequency but lost suffix by OCR.
+        return bool(dosage or frequency or meal_timing)
 
     def _extract_frequency(self, text: str) -> str | None:
         match = self.frequency_pattern.search(text)
