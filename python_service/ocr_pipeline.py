@@ -27,6 +27,9 @@ class OcrPipeline:
         if image is None:
             raise FileNotFoundError(f"Unable to open image: {image_path}")
 
+        if not detections:
+            image = self._downscale(image)
+
         if detections:
             regions = [self._clip_bbox(det, image.shape[1], image.shape[0]) for det in detections]
         else:
@@ -55,6 +58,15 @@ class OcrPipeline:
                 )
 
         return self._deduplicate(raw_candidates)
+
+    def _downscale(self, image: np.ndarray, max_dimension: int = 1800) -> np.ndarray:
+        h, w = image.shape[:2]
+        longest = max(h, w)
+        if longest <= max_dimension:
+            return image
+        scale = max_dimension / longest
+        new_size = (int(w * scale), int(h * scale))
+        return cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
 
     def _clip_bbox(self, det: dict[str, float | int | str], width: int, height: int) -> dict[str, int]:
         x1 = max(0, int(det["x1"]) - self.padding)
