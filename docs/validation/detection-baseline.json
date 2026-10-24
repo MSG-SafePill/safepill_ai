@@ -1,0 +1,40 @@
+{
+  "mode": "detection",
+  "source_root": "C:\\Users\\Sj\\AppData\\Local\\Temp\\safepill-baseline-vaafw4bj\\source",
+  "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "repeat": 5,
+  "note": "Inference results are real when measured. No mock fallback. Cold call and warm calls are separate.",
+  "packages": {
+    "ultralytics": "missing",
+    "torch": "missing",
+    "easyocr": "missing",
+    "opencv-python-headless": "missing",
+    "numpy": "2.3.5"
+  },
+  "images": [
+    {
+      "image": "C:\\Users\\Sj\\Documents\\Codex\\MSG-SafePill\\safepill_ai\\test\\디아셀캡슐50밀리그램.png",
+      "expected_label": "40792",
+      "image_sha256": "734f18b49ef97aa69e9ecf445520c95ea33e747fa03d94c895a7390fb5b7b845",
+      "status": "측정 불가",
+      "reason": "ModuleNotFoundError: No module named 'ultralytics'"
+    },
+    {
+      "image": "C:\\Users\\Sj\\Documents\\Codex\\MSG-SafePill\\safepill_ai\\test\\써스펜데이정.png",
+      "expected_label": "34342",
+      "image_sha256": "b9abca806778e8d5292cf3bd488906dea09c1c85a91e852c8f116fc7e9e228fc",
+      "status": "측정 불가",
+      "reason": "ModuleNotFoundError: No module named 'ultralytics'"
+    },
+    {
+      "image": "C:\\Users\\Sj\\Documents\\Codex\\MSG-SafePill\\safepill_ai\\test\\오피큐탄연질캡슐 .png",
+      "expected_label": "29002",
+      "image_sha256": "8250be0efe4c448e2a34715a6d65e8fc4dffff0146dd00cc1184b1c0c2bbca5a",
+      "status": "측정 불가",
+      "reason": "ModuleNotFoundError: No module named 'ultralytics'"
+    }
+  ],
+  "status": "측정 불가",
+  "reason": "ModuleNotFoundError: No module named 'ultralytics'"
+}

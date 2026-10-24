@@ -1,4 +1,10 @@
+param(
+    [switch]$InstallDependencies,
+    [switch]$Reload
+)
+
 $ErrorActionPreference = "Stop"
+Set-Location $PSScriptRoot
 
 function Test-PythonCommand {
     param(
@@ -36,6 +42,9 @@ function Test-PythonCommand {
 }
 
 if (-not (Test-Path ".venv")) {
+    if (-not $InstallDependencies) {
+        throw "No .venv found. Prepare the AI environment, or explicitly run .\run_server.ps1 -InstallDependencies."
+    }
     $pythonCommand = $null
     foreach ($candidate in @("py", "python", "python3")) {
         if (Test-PythonCommand $candidate) {
@@ -55,7 +64,11 @@ if (-not (Test-Path ".venv")) {
     }
 }
 
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r python_service\requirements.txt
-python -m uvicorn python_service.app:app --reload --host 0.0.0.0 --port 8000
+$venvPython = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
+if ($InstallDependencies) {
+    & $venvPython -m pip install -r python_service\requirements.txt
+    if ($LASTEXITCODE -ne 0) { throw "AI dependency installation failed." }
+}
+$serverArgs = @('-m', 'uvicorn', 'python_service.app:app', '--host', '0.0.0.0', '--port', '8000')
+if ($Reload) { $serverArgs += '--reload' }
+& $venvPython @serverArgs

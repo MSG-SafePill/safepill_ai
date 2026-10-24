@@ -1,4 +1,3 @@
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -6,6 +5,8 @@ import cv2
 import numpy as np
 
 from python_service.pill_classifier import PillClassificationService
+from python_service.image_io import read_image
+from python_service.vision_runtime import timed_stage
 
 
 class MultiPillClassificationService:
@@ -13,11 +14,11 @@ class MultiPillClassificationService:
         self.classifier = classifier
 
     def classify(self, image_path: Path, top_k: int = 3) -> list[dict[str, Any]]:
-        image = cv2.imread(str(image_path))
-        if image is None:
-            return []
+        with timed_stage("classification_image_decode"):
+            image = read_image(image_path)
 
-        boxes = self._detect_candidate_boxes(image)
+        with timed_stage("pill_regions"):
+            boxes = self._detect_candidate_boxes(image)
         if not boxes:
             height, width = image.shape[:2]
             boxes = [(0, 0, width, height)]
@@ -25,13 +26,15 @@ class MultiPillClassificationService:
         detected_pills = []
         for index, box in enumerate(boxes, start=1):
             crop = self._crop_with_padding(image, box)
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
-                crop_path = Path(temp_file.name)
-                cv2.imwrite(str(crop_path), crop)
-            try:
-                candidates = self.classifier.classify(crop_path, top_k=top_k)
-            finally:
-                crop_path.unlink(missing_ok=True)
+            # Preserve the previous JPEG codec/default quality, without a disk round trip.
+            with timed_stage("pill_crop_prepare"):
+                encoded_ok, encoded = cv2.imencode(".jpg", crop)
+                if not encoded_ok:
+                    raise ValueError("Unable to encode pill image.")
+                decoded_crop = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+                if decoded_crop is None:
+                    raise ValueError("Unable to decode pill crop.")
+            candidates = self.classifier.classify_image(decoded_crop, top_k=top_k)
 
             x1, y1, x2, y2 = box
             detected_pills.append(

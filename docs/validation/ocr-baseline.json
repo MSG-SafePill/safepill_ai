@@ -1,0 +1,26 @@
+{
+  "mode": "ocr",
+  "source_root": "C:\\Users\\Sj\\AppData\\Local\\Temp\\safepill-baseline-vaafw4bj\\source",
+  "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "repeat": 5,
+  "note": "Inference results are real when measured. No mock fallback. Cold call and warm calls are separate.",
+  "packages": {
+    "ultralytics": "missing",
+    "torch": "missing",
+    "easyocr": "missing",
+    "opencv-python-headless": "missing",
+    "numpy": "2.3.5"
+  },
+  "images": [
+    {
+      "image": "C:\\Users\\Sj\\Documents\\Codex\\MSG-SafePill\\safepill_ai\\test\\강민준_처방전.jpg",
+      "expected_label": null,
+      "image_sha256": "cf43382c7e42e8c3084f9bcbdb01885ab71f344771e3c82a19358a1a835302ac",
+      "status": "측정 불가",
+      "reason": "ModuleNotFoundError: No module named 'cv2'"
+    }
+  ],
+  "status": "측정 불가",
+  "reason": "ModuleNotFoundError: No module named 'cv2'"
+}

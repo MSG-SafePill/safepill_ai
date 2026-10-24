@@ -1,10 +1,13 @@
 import re
-from functools import lru_cache
 from pathlib import Path
+from threading import RLock
 
 import cv2
 import easyocr
 import numpy as np
+
+from python_service.image_io import read_image
+from python_service.vision_runtime import timed_stage
 
 
 class OcrPipeline:
@@ -12,10 +15,18 @@ class OcrPipeline:
         self.languages = languages or ["ko", "en"]
         self.use_gpu = use_gpu
         self.padding = padding
+        self._reader_instance = None
+        self._lock = RLock()
 
-    @lru_cache(maxsize=1)
     def _reader(self) -> easyocr.Reader:
-        return easyocr.Reader(self.languages, gpu=self.use_gpu)
+        with self._lock:
+            if self._reader_instance is None:
+                with timed_stage("ocr_model_load"):
+                    self._reader_instance = easyocr.Reader(self.languages, gpu=self.use_gpu)
+            return self._reader_instance
+
+    def warmup(self) -> None:
+        self._reader()
 
     def extract(
         self,
@@ -23,9 +34,8 @@ class OcrPipeline:
         detections: list[dict[str, float | int | str]] | None = None,
         min_chars: int = 2,
     ) -> list[dict[str, float | str | int]]:
-        image = cv2.imread(str(image_path))
-        if image is None:
-            raise FileNotFoundError(f"Unable to open image: {image_path}")
+        with timed_stage("ocr_image_decode"):
+            image = read_image(image_path)
 
         if not detections:
             image = self._downscale(image)
@@ -37,13 +47,20 @@ class OcrPipeline:
             regions = [{"x1": 0, "y1": 0, "x2": w, "y2": h}]
 
         raw_candidates: list[dict[str, float | str | int]] = []
+        seen_regions: set[tuple[int, int, int, int]] = set()
         for region_idx, region in enumerate(regions):
+            region_key = tuple(region[key] for key in ("x1", "y1", "x2", "y2"))
+            if region_key in seen_regions:
+                continue
+            seen_regions.add(region_key)
             crop = image[region["y1"] : region["y2"], region["x1"] : region["x2"]]
             if crop.size == 0:
                 continue
-            processed = self._preprocess(crop)
+            with timed_stage("ocr_preprocess"):
+                processed = self._preprocess(crop)
             # easyocr output: [([x1,y1],[x2,y2],[x3,y3],[x4,y4]), text, confidence]
-            ocr_results = self._reader().readtext(processed, detail=1, paragraph=False)
+            with self._lock, timed_stage("ocr_inference"):
+                ocr_results = self._reader().readtext(processed, detail=1, paragraph=False)
             for _, text, confidence in ocr_results:
                 normalized = self._normalize_text(text)
                 if len(normalized) < min_chars:
@@ -58,6 +75,58 @@ class OcrPipeline:
                 )
 
         return self._deduplicate(raw_candidates)
+
+    def extract_prescription_medicines(self, image_path: Path) -> list[dict[str, float | str | int]]:
+        """Read the product-name column at its original resolution.
+
+        Pharmacy printouts often put ingredients, instructions, and the receipt
+        beside the medicine names. Reading the whole page as one region makes
+        those unrelated strings look like additional prescriptions.
+        """
+        with timed_stage("ocr_image_decode"):
+            image = read_image(image_path)
+        height, width = image.shape[:2]
+        x1, x2 = int(width * 0.08755), int(width * 0.36765)
+        y1, y2 = int(height * 0.18675), int(height * 0.79366)
+        crop = image[y1:y2, x1:x2]
+        if crop.size == 0:
+            return []
+        with timed_stage("ocr_preprocess"):
+            grayscale = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        with self._lock, timed_stage("ocr_inference"):
+            ocr_results = self._reader().readtext(grayscale, detail=1, paragraph=False)
+
+        candidates: dict[str, dict[str, float | str | int]] = {}
+        for _, text, confidence in ocr_results:
+            medicine_name = self._prescription_medicine_name(text)
+            if medicine_name is None:
+                continue
+            candidate = {
+                "text": medicine_name,
+                "normalizedText": self._normalize_text(medicine_name),
+                "confidence": round(float(confidence), 4),
+                "regionIndex": 0,
+            }
+            key = str(candidate["normalizedText"])
+            previous = candidates.get(key)
+            if previous is None or float(candidate["confidence"]) > float(previous["confidence"]):
+                candidates[key] = candidate
+        return list(candidates.values())
+
+    @staticmethod
+    def _prescription_medicine_name(text: str) -> str | None:
+        cleaned = re.sub(r"\s+", "", text.strip())
+        if not cleaned or cleaned.startswith(("(", "[")):
+            return None
+        if re.search(r"(?:흰색|백색|청색|분홍색|녹색|황색|미황색|연녹색|경질|연질|복약|운전)", cleaned):
+            return None
+        # Parentheses on these printouts contain ingredients, not another drug.
+        title = re.split(r"[(_]", cleaned, maxsplit=1)[0]
+        if not re.match(r"^[가-힣][가-힣A-Za-z0-9.-]{2,}$", title):
+            return None
+        if not re.search(r"(?:캡[슐술]|캠술|서방정|장용정|정|시럽|현탁액|주사|산|액)(?:\d+(?:\.\d+)?(?:mg|g|밀리그램))?$", title, re.IGNORECASE):
+            return None
+        return re.sub(r"(?:캡술|캠술)$", "캡슐", title)
 
     def _downscale(self, image: np.ndarray, max_dimension: int = 1800) -> np.ndarray:
         h, w = image.shape[:2]

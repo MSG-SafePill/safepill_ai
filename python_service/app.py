@@ -1,11 +1,13 @@
 import os
-import tempfile
+from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
+from threading import BoundedSemaphore
 from uuid import uuid4
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
@@ -20,8 +22,65 @@ from python_service.multi_pill_classifier import MultiPillClassificationService
 from python_service.pill_classifier import PillClassificationService
 from python_service.ocr_pipeline import OcrPipeline
 from python_service.prescription_ocr import PrescriptionOcrParser
+from python_service.vision_runtime import (
+    ImageTooLarge, MAX_IMAGE_BYTES, VisionTimingMiddleware, logger, save_upload, timed_stage,
+)
 
-app = FastAPI(title="SafePill Python Inference Service")
+_vision_slots = BoundedSemaphore(1)
+_startup_failures: dict[str, str] = {}
+
+
+def vision_slot():
+    # Reject overlap instead of accumulating stale work after the caller times out.
+    if not _vision_slots.acquire(blocking=False):
+        raise HTTPException(503, "AI server is busy. Please retry shortly.", headers={"Retry-After": "2"})
+    try:
+        yield
+    except HTTPException:
+        raise
+    except ImageTooLarge as exc:
+        raise HTTPException(413, str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(503, "Required AI model or image file is unavailable.") from exc
+    except ValueError as exc:
+        raise HTTPException(400, "Unable to process image. Check the image format and request.") from exc
+    except Exception as exc:
+        logger.error("vision stage=request_failed error_type=%s", type(exc).__name__)
+        raise HTTPException(502, "AI image processing failed. Please retry.") from exc
+    finally:
+        _vision_slots.release()
+
+
+def _ready_service(name, loader):
+    if name in _startup_failures:
+        raise HTTPException(503, f"AI {name} is unavailable. Check server startup logs.")
+    return loader()
+
+
+def _preload_vision_models():
+    _startup_failures.clear()
+    for name, loader in (
+        ("detection", get_engine),
+        ("classification", get_pill_classification_service),
+        ("ocr", lambda: get_ocr_pipeline().warmup()),
+    ):
+        try:
+            with timed_stage(f"startup_{name}"):
+                loader()
+        except Exception as exc:
+            _startup_failures[name] = type(exc).__name__
+            logger.error("vision model=%s startup_failed=%s; restore model/dependencies and restart", name, type(exc).__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Loading completes before accepting requests; one instance per server worker.
+    await run_in_threadpool(_preload_vision_models)
+    yield
+
+
+app = FastAPI(title="SafePill Python Inference Service", lifespan=lifespan)
+app.add_middleware(VisionTimingMiddleware)
 
 
 class InferRequest(BaseModel):
@@ -249,11 +308,11 @@ class MultiPillClassificationResponse(BaseModel):
 
 
 def _default_model_path() -> Path:
-    return Path(__file__).resolve().parent.parent / "runs" / "detect" / "train" / "weights" / "best.pt"
+    return Path(__file__).resolve().parent.parent / "models" / "pill_detect" / "yolo11n" / "best.pt"
 
 
 def _default_pill_cls_model_path() -> Path:
-    return Path(__file__).resolve().parent.parent / "models" / "pill_cls" / "best.pt"
+    return Path(__file__).resolve().parent.parent / "models" / "pill_cls" / "yolo11n" / "best.pt"
 
 
 def _default_pill_cls_mapping_path() -> Path:
@@ -315,7 +374,7 @@ def get_pill_classification_service() -> PillClassificationService:
 
 @lru_cache(maxsize=1)
 def get_multi_pill_classification_service() -> MultiPillClassificationService:
-    return MultiPillClassificationService(get_pill_classification_service())
+    return MultiPillClassificationService(_ready_service("classification", get_pill_classification_service))
 
 
 @app.get("/health")
@@ -323,20 +382,20 @@ def health():
     return {"status": "ok"}
 
 
-async def _save_upload(upload: UploadFile) -> Path:
+def _save_upload(upload: UploadFile) -> Path:
+    if upload.size is not None and upload.size > MAX_IMAGE_BYTES:
+        raise ImageTooLarge("Image must be 30 MB or smaller.")
     suffix = Path(upload.filename or "").suffix or ".jpg"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
-        temp_file.write(await upload.read())
-        return Path(temp_file.name)
+    return save_upload(upload.file, suffix)
 
 
-@app.post("/infer", response_model=InferResponse)
+@app.post("/infer", response_model=InferResponse, dependencies=[Depends(vision_slot)])
 def infer(request: InferRequest):
     image_path = Path(request.imagePath)
     if not image_path.exists():
         raise HTTPException(status_code=400, detail=f"Image file not found: {image_path}")
 
-    predictions = get_engine().infer(image_path)
+    predictions = _ready_service("detection", get_engine).infer(image_path)
     return InferResponse(
         requestId=str(uuid4()),
         status="ok" if predictions else "no_detection",
@@ -344,14 +403,15 @@ def infer(request: InferRequest):
     )
 
 
-@app.post("/ocr", response_model=OcrResponse)
+@app.post("/ocr", response_model=OcrResponse, dependencies=[Depends(vision_slot)])
 def ocr(request: OcrRequest):
     image_path = Path(request.imagePath)
     if not image_path.exists():
         raise HTTPException(status_code=400, detail=f"Image file not found: {image_path}")
 
-    detections = get_engine().detect(image_path) if request.useDetections else None
-    candidates = get_ocr_pipeline().extract(image_path=image_path, detections=detections)
+    detections = _ready_service("detection", get_engine).detect(image_path) if request.useDetections else None
+    with timed_stage("ocr_total"):
+        candidates = _ready_service("ocr", get_ocr_pipeline).extract(image_path=image_path, detections=detections)
 
     return OcrResponse(
         requestId=str(uuid4()),
@@ -360,7 +420,7 @@ def ocr(request: OcrRequest):
     )
 
 
-@app.post("/identify", response_model=IdentifyResponse)
+@app.post("/identify", response_model=IdentifyResponse, dependencies=[Depends(vision_slot)])
 def identify(request: IdentifyRequest):
     image_path = Path(request.imagePath)
     if not image_path.exists():
@@ -368,15 +428,18 @@ def identify(request: IdentifyRequest):
     if request.topK < 1 or request.topK > 20:
         raise HTTPException(status_code=400, detail="topK must be between 1 and 20.")
 
-    detections = get_engine().detect(image_path)
-    ocr_candidates = get_ocr_pipeline().extract(image_path=image_path, detections=detections)
-    pill_catalog = fetch_pill_catalog()
-    identified = get_fusion_service().rank_candidates(
-        detections=detections,
-        ocr_candidates=ocr_candidates,
-        pill_catalog=pill_catalog,
-        top_k=request.topK,
-    )
+    detections = _ready_service("detection", get_engine).detect(image_path)
+    with timed_stage("ocr_total"):
+        ocr_candidates = _ready_service("ocr", get_ocr_pipeline).extract(image_path=image_path, detections=detections)
+    with timed_stage("catalog_fetch"):
+        pill_catalog = fetch_pill_catalog()
+    with timed_stage("catalog_rank"):
+        identified = get_fusion_service().rank_candidates(
+            detections=detections,
+            ocr_candidates=ocr_candidates,
+            pill_catalog=pill_catalog,
+            top_k=request.topK,
+        )
     return IdentifyResponse(
         requestId=str(uuid4()),
         status="ok" if identified else "no_match",
@@ -386,21 +449,21 @@ def identify(request: IdentifyRequest):
     )
 
 
-@app.post("/identify-upload", response_model=IdentifyResponse)
-async def identify_upload(image: UploadFile = File(...), topK: int = 5):
-    image_path = await _save_upload(image)
+@app.post("/identify-upload", response_model=IdentifyResponse, dependencies=[Depends(vision_slot)])
+def identify_upload(image: UploadFile = File(...), topK: int = 5):
+    image_path = _save_upload(image)
     try:
         return identify(IdentifyRequest(imagePath=str(image_path), topK=topK))
     finally:
         image_path.unlink(missing_ok=True)
 
 
-@app.post("/classify-pill", response_model=PillClassificationResponse)
-async def classify_pill(image: UploadFile = File(...)):
-    image_path = await _save_upload(image)
+@app.post("/classify-pill", response_model=PillClassificationResponse, dependencies=[Depends(vision_slot)])
+def classify_pill(image: UploadFile = File(...)):
+    image_path = _save_upload(image)
     try:
         try:
-            candidates = get_pill_classification_service().classify(image_path=image_path, top_k=3)
+            candidates = _ready_service("classification", get_pill_classification_service).classify(image_path=image_path, top_k=3)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         return PillClassificationResponse(
@@ -411,9 +474,9 @@ async def classify_pill(image: UploadFile = File(...)):
         image_path.unlink(missing_ok=True)
 
 
-@app.post("/classify-pills", response_model=MultiPillClassificationResponse)
-async def classify_pills(image: UploadFile = File(...)):
-    image_path = await _save_upload(image)
+@app.post("/classify-pills", response_model=MultiPillClassificationResponse, dependencies=[Depends(vision_slot)])
+def classify_pills(image: UploadFile = File(...)):
+    image_path = _save_upload(image)
     try:
         try:
             detected_pills = get_multi_pill_classification_service().classify(image_path=image_path, top_k=3)
@@ -428,21 +491,24 @@ async def classify_pills(image: UploadFile = File(...)):
         image_path.unlink(missing_ok=True)
 
 
-@app.post("/prescription-ocr", response_model=PrescriptionOcrResponse)
+@app.post("/prescription-ocr", response_model=PrescriptionOcrResponse, dependencies=[Depends(vision_slot)])
 def prescription_ocr(request: PrescriptionOcrRequest):
     image_path = Path(request.imagePath)
     if not image_path.exists():
         raise HTTPException(status_code=400, detail=f"Image file not found: {image_path}")
 
-    ocr_candidates = get_ocr_pipeline().extract(image_path=image_path, detections=None)
-    parsed_items = get_prescription_parser().parse(ocr_candidates)
-    match_results = {
-        str(result["keyword"]): result["candidates"]
-        for result in get_medication_matcher().match(
-            [str(item["medicineName"]) for item in parsed_items],
-            top_k=5,
-        )
-    }
+    with timed_stage("ocr_total"):
+        ocr_candidates = _ready_service("ocr", get_ocr_pipeline).extract_prescription_medicines(image_path=image_path)
+    with timed_stage("prescription_parse"):
+        parsed_items = get_prescription_parser().parse(ocr_candidates)
+    with timed_stage("catalog_match"):
+        match_results = {
+            str(result["keyword"]): result["candidates"]
+            for result in get_medication_matcher().match(
+                [str(item["medicineName"]) for item in parsed_items],
+                top_k=5,
+            )
+        } if parsed_items else {}
     for item in parsed_items:
         item["matchCandidates"] = match_results.get(str(item["medicineName"]), [])
     return PrescriptionOcrResponse(
@@ -453,9 +519,9 @@ def prescription_ocr(request: PrescriptionOcrRequest):
     )
 
 
-@app.post("/prescription-ocr-upload", response_model=PrescriptionOcrResponse)
-async def prescription_ocr_upload(image: UploadFile = File(...)):
-    image_path = await _save_upload(image)
+@app.post("/prescription-ocr-upload", response_model=PrescriptionOcrResponse, dependencies=[Depends(vision_slot)])
+def prescription_ocr_upload(image: UploadFile = File(...)):
+    image_path = _save_upload(image)
     try:
         return prescription_ocr(PrescriptionOcrRequest(imagePath=str(image_path)))
     finally:

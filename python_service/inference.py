@@ -1,6 +1,9 @@
 from pathlib import Path
+from threading import Lock
 
 from ultralytics import YOLO
+
+from python_service.vision_runtime import timed_stage
 
 
 class YoloInferenceEngine:
@@ -15,7 +18,9 @@ class YoloInferenceEngine:
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
         self.device = device
-        self._model = self._load_model()
+        self._lock = Lock()
+        with timed_stage("yolo_detection_model_load"):
+            self._model = self._load_model()
 
     def _load_model(self) -> YOLO:
         if not self.model_path.exists():
@@ -23,13 +28,14 @@ class YoloInferenceEngine:
         return YOLO(str(self.model_path))
 
     def detect(self, image_path: Path) -> list[dict[str, float | int | str]]:
-        results = self._model.predict(
-            source=str(image_path),
-            conf=self.conf_threshold,
-            iou=self.iou_threshold,
-            device=self.device,
-            verbose=False,
-        )
+        with self._lock, timed_stage("yolo_detection"):
+            results = self._model.predict(
+                source=str(image_path),
+                conf=self.conf_threshold,
+                iou=self.iou_threshold,
+                device=self.device,
+                verbose=False,
+            )
         if not results:
             return []
 
