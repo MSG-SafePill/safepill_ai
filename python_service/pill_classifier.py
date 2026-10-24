@@ -1,6 +1,9 @@
 import json
 from pathlib import Path
 from typing import Any
+from threading import Lock
+
+from python_service.vision_runtime import timed_stage
 
 
 class PillClassificationService:
@@ -10,9 +13,16 @@ class PillClassificationService:
 
         from ultralytics import YOLO
 
-        self.model = YOLO(str(model_path))
+        with timed_stage("yolo_classification_model_load"):
+            self.model = YOLO(str(model_path))
         self.mapping = self._load_mapping(mapping_path)
         self.device = device
+        self._lock = Lock()
+        if self.model.task != "classify":
+            raise ValueError("Pill model must be a trained classification model, not a detection model.")
+        labels = {str(label) for label in self.model.names.values()}
+        if not labels or not labels.issubset(self.mapping):
+            raise ValueError("Pill model classes do not match pill_class_mapping.json.")
 
     @staticmethod
     def _load_mapping(mapping_path: Path) -> dict[str, dict[str, Any]]:
@@ -23,7 +33,11 @@ class PillClassificationService:
         return {str(label): value for label, value in data.items()}
 
     def classify(self, image_path: Path, top_k: int = 3) -> list[dict[str, Any]]:
-        results = self.model.predict(str(image_path), device=self.device, verbose=False)
+        return self.classify_image(str(image_path), top_k)
+
+    def classify_image(self, image, top_k: int = 3) -> list[dict[str, Any]]:
+        with self._lock, timed_stage("yolo_classification"):
+            results = self.model.predict(image, device=self.device, verbose=False)
         if not results:
             return []
 

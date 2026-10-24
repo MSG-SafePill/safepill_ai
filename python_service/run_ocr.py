@@ -7,7 +7,7 @@ from python_service.ocr_pipeline import OcrPipeline
 
 
 def default_model_path() -> Path:
-    return Path(__file__).resolve().parent.parent / "runs" / "detect" / "train" / "weights" / "best.pt"
+    return Path(__file__).resolve().parent.parent / "models" / "pill_detect" / "yolo11n" / "best.pt"
 
 
 def main() -> None:
@@ -15,6 +15,7 @@ def main() -> None:
     parser.add_argument("--image", required=True, help="Path to image file")
     parser.add_argument("--model", default=str(default_model_path()), help="YOLO model path")
     parser.add_argument("--use-detections", action="store_true", help="Crop OCR regions with YOLO detections")
+    parser.add_argument("--medicines-only", action="store_true", help="Read only medicine names from a pharmacy printout")
     args = parser.parse_args()
 
     image_path = Path(args.image)
@@ -22,12 +23,13 @@ def main() -> None:
         raise FileNotFoundError(f"Image file not found: {image_path}")
 
     detections = None
-    if args.use_detections:
+    if args.use_detections and not args.medicines_only:
         yolo = YoloInferenceEngine(model_path=Path(args.model))
         detections = yolo.detect(image_path)
 
     pipeline = OcrPipeline()
-    result = pipeline.extract(image_path=image_path, detections=detections)
+    result = (pipeline.extract_prescription_medicines(image_path=image_path)
+              if args.medicines_only else pipeline.extract(image_path=image_path, detections=detections))
     print(json.dumps({"status": "ok" if result else "no_text", "candidates": result}, ensure_ascii=False))
 
 

@@ -34,7 +34,7 @@ pip install -r python_service\requirements.txt
 
 3. 환경변수 설정
 
-`.env.example`을 참고해 필요한 값을 설정합니다.
+필요한 환경변수를 `.env` 또는 실행 셸에 설정합니다.
 
 필수 항목:
 
@@ -44,7 +44,8 @@ pip install -r python_service\requirements.txt
 - `DB_NAME`
 - `DB_USER`
 - `DB_PASS`
-- `SAFEPILL_MODEL_PATH`
+
+검출·분류 모델 경로는 아래 YOLO11 학습 결과가 기본값입니다. 다른 파일을 사용할 때만 `SAFEPILL_MODEL_PATH`, `SAFEPILL_PILL_CLS_MODEL_PATH`를 설정합니다.
 
 개발 중 OpenAI 키 없이 상호작용 분석 API만 확인하려면:
 
@@ -55,8 +56,14 @@ $env:SAFEPILL_INTERACTION_OFFLINE="true"
 ## Python API 서버 실행
 
 ```powershell
-uvicorn python_service.app:app --reload --port 8000
+uvicorn python_service.app:app --host 0.0.0.0 --port 8000
 ```
+
+발표에서는 단일 worker와 reload 없는 실행을 권장합니다. 모델은 시작 시 한 번 로딩하며, 실패한 모델의 API는 503을 반환합니다. `/health`는 기존과 동일한 프로세스 생존 확인이며 모델 준비 완료를 보장하지 않습니다. 시작 로그의 `startup_failed`를 확인하고 실제 이미지로 점검해야 합니다.
+
+`run_server.ps1`은 기존 `.venv`를 사용합니다. 의존성 설치는 명시적으로 `-InstallDependencies`를 지정할 때만 수행하고, 개발용 자동 재시작은 `-Reload`로 선택합니다.
+
+2026-10-21 당시 코드 분석, 변경 내역과 검증 한계: [AI 성능·안정성 점검 보고서](docs/AI_PERFORMANCE_REVIEW_2026-10-21.md). 이 보고서의 YOLOv8 기본 경로는 당시 상태이며, 현재 YOLO11 경로는 아래 설명을 따릅니다.
 
 헬스 체크:
 
@@ -64,40 +71,40 @@ uvicorn python_service.app:app --reload --port 8000
 curl http://localhost:8000/health
 ```
 
-## YOLO 학습(알약 종류 식별)
+## YOLO11 새 학습
 
-현재 `/infer`의 `pillName`은 YOLO 클래스명을 그대로 사용합니다.  
-즉, **어떤 알약인지 식별**하려면 라벨 변환 단계에서 클래스가 1개(`pill`)가 아니라 알약별 멀티클래스로 만들어져야 합니다.
+`train.py`와 `scripts/train_pill_classifier.py`는 YOLO11 구조 YAML에서 무작위 초기화하고 `pretrained=False`, `resume=False`로 학습합니다. 기존 YOLOv8 가중치나 YOLO11 사전학습 `.pt`를 입력으로 받지 않습니다. Ultralytics `8.3.148`에는 두 구조가 포함되어 있습니다. 아래 명령은 `safepill_ai` 폴더에서 실행합니다.
 
-1. JSON 라벨 -> YOLO TXT 변환 (클래스 매핑 포함)
+### 알약 영역 검출 (`/infer`, `/ocr`의 선택적 영역 검출, `/identify`)
 
-```powershell
-python convert_json.py --json-dir C:\AIData\...\라벨링데이터 --output-dir C:\AIData\labels_txt --class-map-output C:\AIData\labels_txt\classes.json
-```
-
-2. 이미지/라벨 split + `data.yaml` 자동 생성
+`data.yaml`에 유효한 train/val 이미지와 대응하는 YOLO TXT 박스 라벨이 있어야 합니다. 현재 기본 `data.yaml`은 이 PC에 없는 `C:/AIData/pill_dataset`을 가리키므로 실제 데이터 경로로 수정하거나 `--data`로 다른 YAML을 지정해야 합니다. 기본 클래스가 `pill` 하나이므로 이 모델은 알약 **위치만** 검출하며 종류를 구별하지 않습니다.
 
 ```powershell
-python split_data.py --image-dir C:\AIData\...\원천데이터 --label-dir C:\AIData\labels_txt --dataset-dir C:\AIData\pill_dataset --class-map C:\AIData\labels_txt\classes.json --data-yaml C:\Users\ysjys\IdeaProjects\safepill_hub\ai\data.yaml
+python train.py --data .\data.yaml --device 0
 ```
 
-3. YOLO 학습
+완료된 새 모델은 `models/pill_detect/yolo11n/best.pt`에 복사되며 서버의 기본 검출 경로도 이 파일입니다. 이미 파일이 있으면 덮어쓰지 않으므로 다른 `--output-model`을 지정하세요. 기존 `runs/detect/train/weights/best.pt`는 보존됩니다.
+
+### 약품 종류 분류 (`/classify-pills`, 실제 Flutter 낱알 화면)
+
+`datasets/pill_mvp/yolo_cls/train/<약품ID>/`, `val/<약품ID>/`에 독립적으로 촬영한 이미지가 필요합니다. 현재 매핑의 약품 ID는 `40792`, `29002`, `34342`입니다. 예제 사진 3장은 학습·검증 세트를 대신할 수 없습니다.
 
 ```powershell
-python train.py --data C:\Users\ysjys\IdeaProjects\safepill_hub\ai\data.yaml --model yolov8s.pt --epochs 200 --device 0
+python scripts/train_pill_classifier.py --check-only
+python scripts/train_pill_classifier.py --device 0
 ```
 
-학습 후 모델 파일:
-
-- `SafePill_AI\yolov8s_full_run\weights\best.pt`
-
-서버에서 해당 모델을 사용하려면:
-
-```powershell
-$env:SAFEPILL_MODEL_PATH="C:\Users\ysjys\IdeaProjects\safepill_hub\ai\SafePill_AI\yolov8s_full_run\weights\best.pt"
-```
+완료된 새 모델은 `models/pill_cls/yolo11n/best.pt`에 복사되며 서버의 기본 분류 경로도 이 파일입니다. 두 새 가중치가 생성되기 전에는 해당 모델을 사용하는 API가 503을 반환할 수 있습니다. 학습 후 별도 test 이미지로 세 약품과 미지원 약품을 검증한 뒤 앱에서 사용하세요. 다른 경로를 사용할 때는 각각 `SAFEPILL_MODEL_PATH`, `SAFEPILL_PILL_CLS_MODEL_PATH`로 지정할 수 있습니다.
 
 ## 주요 엔드포인트
+
+처방전 사진에서 약품명만 확인하려면 다음 명령을 사용합니다. 약품명 열을 읽는 방식이므로 다른 양식의 처방전에서는 결과를 반드시 확인하세요.
+
+```powershell
+.\.venv\Scripts\python.exe -m python_service.run_ocr --image "test\강민준_처방전.jpg" --medicines-only
+```
+
+앱의 처방전 OCR 업로드 API도 이 약품명 추출 경로를 사용합니다. OCR 결과는 자동 등록 전에 확인이 필요합니다.
 
 - `GET /health`: 서비스 상태 확인
 - `POST /infer`: YOLO 탐지 결과 반환

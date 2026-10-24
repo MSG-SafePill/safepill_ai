@@ -1,0 +1,10 @@
+{
+  "baseline_commit": "c65c31694600cc16c9701195a076f0874c7552d7",
+  "api_schemas_unchanged": 32,
+  "routes_and_parameters_unchanged": 12,
+  "weight_sha256": {
+    "yolov8n.pt": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36",
+    "runs\\detect\\train\\weights\\best.pt": "0b9080622afe69d414cfa26872dbf0c4871dd7f4d9200ff424edf2f131f29527",
+    "runs\\detect\\train\\weights\\last.pt": "ae370c723adde1d2702734f90521e3b2c5f8c31d33ef196b3cc404a99d45571f"
+  }
+}

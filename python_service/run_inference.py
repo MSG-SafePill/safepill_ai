@@ -10,7 +10,7 @@ def main() -> None:
     parser.add_argument("--image", required=True, help="Path to image file")
     parser.add_argument(
         "--model",
-        default=str(Path(__file__).resolve().parent.parent / "runs" / "detect" / "train" / "weights" / "best.pt"),
+        default=str(Path(__file__).resolve().parent.parent / "models" / "pill_detect" / "yolo11n" / "best.pt"),
         help="Path to YOLO model (.pt)",
     )
     parser.add_argument("--conf", type=float, default=0.25, help="Confidence threshold")

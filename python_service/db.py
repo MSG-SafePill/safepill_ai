@@ -4,15 +4,22 @@ from typing import Any, Iterator
 
 
 @contextmanager
-def get_connection() -> Iterator[Any]:
+def get_connection(*, bounded: bool = False) -> Iterator[Any]:
     import psycopg2
 
+    timeouts = {}
+    if bounded:
+        timeouts = {
+            "connect_timeout": int(os.getenv("SAFEPILL_DB_CONNECT_TIMEOUT_SECONDS", "3")),
+            "options": "-c statement_timeout=" + str(int(os.getenv("SAFEPILL_DB_STATEMENT_TIMEOUT_MS", "10000"))),
+        }
     conn = psycopg2.connect(
         host=os.getenv("DB_HOST", "localhost"),
         port=os.getenv("DB_PORT", "5432"),
         database=os.getenv("DB_NAME", "safepill"),
         user=os.getenv("DB_USER", "postgres"),
         password=os.getenv("DB_PASS", ""),
+        **timeouts,
     )
     try:
         yield conn
@@ -31,7 +38,7 @@ def fetch_pill_names() -> list[str]:
 def fetch_pill_catalog() -> list[dict[str, str | int | None]]:
     from psycopg2.extras import RealDictCursor
 
-    with get_connection() as conn:
+    with get_connection(bounded=True) as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             if _table_exists(cur, "pills"):
                 cur.execute(
@@ -74,7 +81,7 @@ def fetch_pill_catalog() -> list[dict[str, str | int | None]]:
 def fetch_medication_catalog() -> list[dict[str, str | int | None]]:
     from psycopg2.extras import RealDictCursor
 
-    with get_connection() as conn:
+    with get_connection(bounded=True) as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             rows: list[dict[str, object]] = []
             if _table_exists(cur, "medicine_master"):
